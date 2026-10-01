@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="toolbar">
+ <button class="btn primary" id="add">+ Tambah Produksi</button>
+ <label>Dari <input type="date" id="f"></label>
+ <label>Sampai <input type="date" id="t"></label>
+ <div class="seg" id="seg"><button data-v="rekap" class="on">Rekap</button><button data-v="daftar">Daftar Input</button></div>
+ <label id="byw">Kelompokkan per <select id="by"><option value="tanggal">Tanggal</option><option value="nama">Nama karyawan</option>
+  <option value="motif">Motif</option><option value="jenis">Jenis</option><option value="ket">Ket</option></select></label>
+ <span class="grow"></span>
+ <a class="btn" id="xl">Export Rekap</a>
+</div>
+<div id="rekapView">
+ <div class="chips" id="chips"></div>
+ <div class="tablewrap"><table id="tb"></table></div>
+</div>
+<div id="listView" style="display:none"></div>
+{% endblock %}
+{% block script %}<script>
+const $f=document.getElementById('f'),$t=document.getElementById('t'),$b=document.getElementById('by');
+$t.value=todayISO();$f.value=defaultFrom();
+const range={from:$f.value,to:$t.value};
+const crud=new Crud(document.getElementById('listView'),'produksi',{hideAdd:true,noRange:true,range,onChange:()=>run()});
+async function run(){
+ const q=new URLSearchParams({from:$f.value,to:$t.value,by:$b.value});
+ document.getElementById('xl').href='/export/rekap?'+q;
+ const r=await (await fetch('/api/rekap?'+q)).json();const tb=document.getElementById('tb');tb.innerHTML='';
+ const heads=[r.label,'Baris'].concat(r.cats.map(c=>c[0].toUpperCase()+c.slice(1)),['Jumlah']);
+ tb.append(h('thead',{},h('tr',{},heads.map(x=>h('th',{},x)))));
+ const body=h('tbody');
+ if(!r.rows.length)body.append(h('tr',{},h('td',{colspan:heads.length,class:'empty'},'Belum ada produksi pada rentang ini. Klik "+ Tambah Produksi".')));
+ for(const x of r.rows){body.append(h('tr',{class:x.total?'total':''},
+  h('td',{},$b.value==='tanggal'&&!x.total?fmtDate(x.grp):x.grp),h('td',{class:'num'},fmtNum(x.baris)),
+  r.cats.map(c=>h('td',{class:'num'},fmtNum(x[c]))),h('td',{class:'num'},h('b',{},fmtNum(x.jumlah)))));}
+ tb.append(body);
+ const tot=r.rows.find(x=>x.total);const ch=document.getElementById('chips');ch.innerHTML='';
+ if(tot)ch.append(h('span',{class:'chip'},h('b',{},tot.baris.toLocaleString('id-ID')),' input'),
+  h('span',{class:'chip big'},'Total produksi ',h('b',{},(tot.jumlah||0).toLocaleString('id-ID'))));}
+function setRange(){if(!$f.value)$f.value=defaultFrom();if(!$t.value)$t.value=todayISO();
+ if($f.value>$t.value){if(document.activeElement===$f)$t.value=$f.value;else $f.value=$t.value;}
+ range.from=$f.value;range.to=$t.value;crud.ready.then(()=>{crud.page=1;crud.load();});run();}
+$f.onchange=$t.onchange=setRange;$b.onchange=run;
+document.querySelectorAll('#seg button').forEach(b=>b.onclick=()=>{
+ const v=b.dataset.v;document.querySelectorAll('#seg button').forEach(x=>x.classList.toggle('on',x===b));
+ document.getElementById('rekapView').style.display=v==='rekap'?'':'none';
+ document.getElementById('listView').style.display=v==='daftar'?'':'none';
+ document.getElementById('byw').style.display=v==='rekap'?'':'none';
+ document.getElementById('xl').style.display=v==='rekap'?'':'none';});
+document.getElementById('add').onclick=()=>crud.ready.then(()=>crud.openForm());
+run();
+</script>{% endblock %}

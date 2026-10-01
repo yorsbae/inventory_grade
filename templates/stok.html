@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="toolbar">
+ <button class="btn" id="prev">&#9664; Sebelumnya</button>
+ <label>Dari <input type="date" id="f"></label>
+ <label>Sampai <input type="date" id="t"></label>
+ <label>Tampilan <select id="mode"><option value="ringkas">Ringkas (per jenis)</option><option value="harian">Per hari (rantai saldo)</option></select></label>
+ <button class="btn primary" id="go">Tampilkan</button>
+ <button class="btn" id="next">Berikutnya &#9654;</button>
+ <span class="grow"></span>
+ <a class="btn" id="xl">Export Excel</a>
+</div>
+<p class="hint">Saldo Awal = Saldo Akhir hari sebelumnya. Dihitung dari transaksi, jadi koreksi data lama otomatis mengubah saldo hari-hari sesudahnya.</p>
+<div class="tablewrap"><table id="tb"></table></div>
+{% endblock %}
+{% block script %}<script>
+const $f=document.getElementById('f'),$t=document.getElementById('t'),$m=document.getElementById('mode');
+$f.value=$t.value=todayISO();
+function shift(n){const d=new Date($f.value+'T00:00:00');d.setDate(d.getDate()+n);
+ const s=new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10);$f.value=$t.value=s;run();}
+async function run(){
+ const q=new URLSearchParams({from:$f.value,to:$t.value||$f.value,mode:$m.value});
+ document.getElementById('xl').href='/export/stok?'+q;
+ const r=await (await fetch('/api/stok?'+q)).json();
+ const harian=r.mode==='harian';const tb=document.getElementById('tb');tb.innerHTML='';
+ const heads=(harian?['Tanggal']:[]).concat(['No','Jenis','Saldo Awal','Masuk','Keluar','Saldo Akhir']);
+ tb.append(h('thead',{},h('tr',{},heads.map(x=>h('th',{},x)))));
+ const body=h('tbody');let n=0;
+ if(!r.rows.length)body.append(h('tr',{},h('td',{colspan:heads.length,class:'empty'},'Belum ada data. Isi Stok Awal Sistem di halaman DB dan input transaksi.')));
+ for(const x of r.rows){if(!x.total)n++;
+  body.append(h('tr',{class:x.total?'total':''},
+   harian?h('td',{},fmtDate(x.tanggal)):null,h('td',{class:'c'},x.total?'':n),h('td',{},x.jenis),
+   ['awal','masuk','keluar','akhir'].map(k=>h('td',{class:'num'},fmtNum(x[k])))));}
+ tb.append(body);}
+document.getElementById('go').onclick=run;
+document.getElementById('prev').onclick=()=>shift(-1);
+document.getElementById('next').onclick=()=>shift(1);
+$m.onchange=run;run();
+</script>{% endblock %}

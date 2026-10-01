@@ -1,0 +1,3 @@
+{% extends "base.html" %}
+{% block body %}<div id="crud"></div>{% endblock %}
+{% block script %}<script>new Crud(document.getElementById('crud'), '{{ key }}');</script>{% endblock %}

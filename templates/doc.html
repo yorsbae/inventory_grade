@@ -1,0 +1,4 @@
+{% extends "base.html" %}
+{% block body %}<p class="hint">Satu SSTB bisa berisi beberapa baris barang. Isi SSTB, tanggal, dept, pengrajin sekali, lalu tambahkan barisnya. Daftar dibatasi ke 7 hari terakhir dan 25 baris per halaman; ubah rentang tanggal, kata kunci, atau Kategori untuk mencari data lain. Pakai "Kolom" untuk menyembunyikan kolom yang tak perlu, dan "Cetak" pada tiap baris untuk mencetak SSTB. Link Produksi (opsional) menandai barang keluar ini berasal dari input produksi yang mana.</p>
+<div id="doc"></div>{% endblock %}
+{% block script %}<script>new DocPage(document.getElementById('doc'), '{{ arah }}');</script>{% endblock %}

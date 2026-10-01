@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="id"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{ title }} - Stok Grade</title>
+<link rel="stylesheet" href="/static/style.css">
+</head><body>
+<header><div class="brand">Stok Grade</div>
+<a class="bk" href="/backup" title="Unduh cadangan database">Backup DB</a>
+<nav>{% for k,l in pages %}<a href="/{{k}}" class="{{ 'on' if current==k else '' }}">{{l}}</a>{% endfor %}</nav></header>
+<main><h1>{{ title }}</h1>{% block body %}{% endblock %}</main>
+<script src="/static/app.js"></script>
+{% block script %}{% endblock %}
+</body></html>

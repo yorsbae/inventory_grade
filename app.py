@@ -3,7 +3,7 @@
 Model data ternormalisasi: transaksi hanya menyimpan ID master. Motif, Jenis, Rumus,
 Jumlah produksi dihitung saat ditampilkan, jadi tidak ada data ganda yang bisa berbeda.
 """
-import os, sys, io, re, shutil, socket, sqlite3, threading, webbrowser
+import os, sys, io, re, json, shutil, socket, sqlite3, threading, webbrowser
 import datetime as dt
 from flask import Flask, g, request, jsonify, render_template, send_file, redirect, abort
 from openpyxl import Workbook, load_workbook
@@ -419,21 +419,64 @@ def select_parts(key):
     joins += s.get("joins", [])
     return ", ".join(sel), " ".join(joins)
 
-def search_exprs(key):
-    """Ekspresi SQL tiap kolom yang tampil, dipakai untuk kotak pencarian (q)."""
-    exprs = []
+def col_info(key):
+    """nama kolom -> (ekspresi SQL, tipe). Dipakai untuk pencarian (q), filter per-kolom ala Excel, dan sort."""
+    out = {}
     for c in SPECS[key]["cols"]:
         n = c["n"]
         if c["t"] == "ref":
             tbl, col = REFS[c["src"]]
-            exprs.append(f"r_{n}.{col}")
+            out[n] = (f"r_{n}.{col}", c["t"])
         elif c["t"] == "auto":
-            exprs.append(f"({c['sql']})")
+            out[n] = (f"({c['sql']})", c["t"])
         elif c["t"] == "linkref":
-            exprs.append(f"({c['labelsql']})")
-        elif c["t"] not in ("int",):
-            exprs.append(f"t.{n}")
-    return exprs
+            out[n] = (f"({c['labelsql']})", c["t"])
+        else:
+            out[n] = (f"t.{n}", c["t"])
+    return out
+
+def search_exprs(key):
+    """Ekspresi SQL kolom teks, dipakai untuk kotak pencarian (q). Kolom angka dilewati."""
+    return [e for e, t in col_info(key).values() if t != "int"]
+
+def parse_filters(args):
+    try:
+        return json.loads(args.get("filters") or "{}") or {}
+    except (TypeError, ValueError):
+        return {}
+
+def apply_col_filters(where, params, info, flt):
+    """Filter per-kolom ala Excel: {nama_kolom: [nilai, ...]} -> WHERE ekspresi IN (...)."""
+    for col, vals in (flt or {}).items():
+        if col in info and vals:
+            expr, _ = info[col]
+            where.append(f"{expr} IN ({','.join('?' * len(vals))})")
+            params.extend(vals)
+
+def parse_ranges(args):
+    try:
+        return json.loads(args.get("ranges") or "{}") or {}
+    except (TypeError, ValueError):
+        return {}
+
+def apply_ranges(where, params, info, ranges):
+    """Filter rentang angka: {nama_kolom: {min, max}} -> WHERE ekspresi BETWEEN."""
+    for col, rng in (ranges or {}).items():
+        if col not in info or not isinstance(rng, dict):
+            continue
+        expr, _ = info[col]
+        mn, mx = rng.get("min"), rng.get("max")
+        if mn not in (None, ""):
+            where.append(f"{expr}>=?"); params.append(mn)
+        if mx not in (None, ""):
+            where.append(f"{expr}<=?"); params.append(mx)
+
+def group_order(args, names, order):
+    """Prefiks ORDER BY dengan kolom Group By (ASC) supaya baris sekelompok berurutan di halaman yang sama."""
+    g = args.get("group")
+    if g and g in names:
+        return f"{g} ASC, {order}"
+    return order
 
 JENIS_FILTER = {  # key -> ekspresi SQL id jenis milik baris, untuk filter "kategori"
     "motif": "t.jenis_id",
@@ -441,7 +484,8 @@ JENIS_FILTER = {  # key -> ekspresi SQL id jenis milik baris, untuk filter "kate
     "produksi": "(SELECT jenis_id FROM ref_motif WHERE id=t.kode_motif_id)",
 }
 
-def list_query(key, args):
+def list_filters(key, args):
+    """joins, daftar klausa WHERE, params — dipakai bareng oleh list_query dan /api/distinct."""
     s = SPECS[key]
     sel, joins = select_parts(key)
     where, params = [], []
@@ -459,8 +503,17 @@ def list_query(key, args):
         if exprs:
             where.append("(" + " OR ".join(f"{e} LIKE ?" for e in exprs) + ")")
             params += [f"%{q}%"] * len(exprs)
+    info = col_info(key)
+    apply_col_filters(where, params, info, parse_filters(args))
+    apply_ranges(where, params, info, parse_ranges(args))
+    return sel, joins, where, params
+
+def list_query(key, args):
+    s = SPECS[key]
+    sel, joins, where, params = list_filters(key, args)
     w = ("WHERE " + " AND ".join(where)) if where else ""
     names = [c["n"] for c in s["cols"]]
+    dc = s.get("datecol")
     direction = "ASC" if args.get("dir") == "asc" else "DESC"
     if args.get("sort") in names:
         order = f"{args['sort']} {direction}, t.id DESC"
@@ -468,7 +521,28 @@ def list_query(key, args):
         order = f"t.{dc} DESC, t.id DESC"
     else:
         order = "t.id ASC"
+    order = group_order(args, names, order)
     return sel, joins, w, params, order
+
+@app.get("/api/distinct/<key>")
+def api_distinct(key):
+    spec_or_404(key)
+    info = col_info(key)
+    col = request.args.get("col", "")
+    if col not in info:
+        return jsonify([])
+    args = request.args.to_dict()
+    flt = parse_filters(args)
+    flt.pop(col, None)  # kolom yang sedang dibuka tidak membatasi daftar pilihannya sendiri
+    args["filters"] = json.dumps(flt)
+    _, joins, where, params = list_filters(key, args)
+    expr, _ = info[col]
+    where = where + [f"{expr} IS NOT NULL", f"{expr}<>''"]
+    w = "WHERE " + " AND ".join(where)
+    rows = get_db().execute(
+        f"SELECT DISTINCT {expr} AS v FROM {SPECS[key]['table']} t {joins} {w} ORDER BY {expr} LIMIT 500",
+        params).fetchall()
+    return jsonify([r["v"] for r in rows])
 
 @app.get("/api/meta/<key>")
 def api_meta(key):
@@ -694,25 +768,55 @@ def arah_or_404(name):
     return ARAH[name]
 
 LINE_SEARCH_EXPRS = ["d.sstb", "dp.nama", "m.kode_motif", "m.nama_motif", "j.nama", "k.nama", "pg.nama", "k.kode"]
+LINE_COL_EXPRS = {"sstb": "d.sstb", "tanggal": "d.tanggal", "dept": "dp.nama", "kode_motif": "m.kode_motif",
+                   "motif": "m.nama_motif", "jenis": "j.nama", "jumlah": "i.jumlah", "ket": "k.nama",
+                   "pengrajin": "pg.nama", "rumus": "k.kode", "link_produksi": LINK_PRODUKSI_LABEL_SQL}
 
-def lines_query(arah, args):
+def lines_filters(arah, args):
+    """daftar klausa WHERE, params — dipakai bareng oleh lines_query dan /api/distinct/lines."""
     where, params = ["d.arah=?"], [arah]
     where.append("d.tanggal>=?"); params.append(args.get("from") or default_from())
     if args.get("to"):
         where.append("d.tanggal<=?"); params.append(args["to"])
-    if args.get("jenis"):
-        where.append("j.nama=?"); params.append(args["jenis"])
+    if args.get("dept"):
+        where.append("dp.nama=?"); params.append(args["dept"])
     q = (args.get("q") or "").strip()
     if q:
         where.append("(" + " OR ".join(f"{e} LIKE ?" for e in LINE_SEARCH_EXPRS) + ")")
         params += [f"%{q}%"] * len(LINE_SEARCH_EXPRS)
+    line_info = {k: (v, "int" if k == "jumlah" else "") for k, v in LINE_COL_EXPRS.items()}
+    apply_col_filters(where, params, line_info, parse_filters(args))
+    apply_ranges(where, params, line_info, parse_ranges(args))
+    return where, params
+
+def lines_query(arah, args):
+    where, params = lines_filters(arah, args)
     w = "WHERE " + " AND ".join(where)
+    names = [c[0] for c in LINE_COLS]
     direction = "ASC" if args.get("dir") == "asc" else "DESC"
-    if args.get("sort") in [c[0] for c in LINE_COLS]:
+    if args.get("sort") in names:
         order = f"{args['sort']} {direction}, doc_id DESC, id ASC"
     else:
         order = "tanggal DESC, doc_id DESC, id ASC"
+    order = group_order(args, names, order)
     return w, params, order
+
+@app.get("/api/distinct/lines/<name>")
+def api_distinct_lines(name):
+    arah = arah_or_404(name)
+    col = request.args.get("col", "")
+    if col not in LINE_COL_EXPRS:
+        return jsonify([])
+    args = request.args.to_dict()
+    flt = parse_filters(args)
+    flt.pop(col, None)
+    args["filters"] = json.dumps(flt)
+    where, params = lines_filters(arah, args)
+    expr = LINE_COL_EXPRS[col]
+    where = where + [f"{expr} IS NOT NULL", f"{expr}<>''"]
+    w = "WHERE " + " AND ".join(where)
+    rows = get_db().execute(f"SELECT DISTINCT {expr} AS v {LINE_FROM} {w} ORDER BY {expr} LIMIT 500", params).fetchall()
+    return jsonify([r["v"] for r in rows])
 
 @app.get("/api/lines/<name>")
 def api_lines(name):
@@ -901,18 +1005,36 @@ def stock_range(db, f, t):
             GROUP BY j.id""", (f, f, t, arah)).fetchall()
         return {r["jn"]: (r["pre"] or 0, r["cur"] or 0) for r in rows}
 
+    def agg_dept(arah):
+        """Rincian per Dept dalam rentang [f,t] saja (bukan sepanjang histori): dari/ke dept mana."""
+        rows = db.execute("""SELECT j.nama jn, dp.nama dept, SUM(i.jumlah) jml
+            FROM dokumen_item i JOIN dokumen d ON d.id=i.dokumen_id
+            JOIN ref_motif m ON m.id=i.motif_id JOIN ref_jenis j ON j.id=m.jenis_id
+            JOIN ref_dept dp ON dp.id=d.dept_id
+            WHERE d.arah=? AND d.tanggal>=? AND d.tanggal<=?
+            GROUP BY j.id, dp.id ORDER BY jml DESC""", (arah, f, t)).fetchall()
+        out = {}
+        for r in rows:
+            out.setdefault(r["jn"], []).append((r["dept"], r["jml"]))
+        return out
+
+    def dept_str(pairs):
+        return ", ".join(f"{d} {fmt_id(j)}" for d, j in pairs)
+
     m, k = agg("M"), agg("K")
+    md, kd = agg_dept("M"), agg_dept("K")
     out = []
     for j in sorted(set(op) | set(m) | set(k)):
         base = op.get(j, 0)
         mp, mc = m.get(j, (0, 0))
         kp, kc = k.get(j, (0, 0))
         awal = base + mp - kp
-        out.append(dict(jenis=j, awal=awal, masuk=mc, keluar=kc, akhir=awal + mc - kc))
+        out.append(dict(jenis=j, awal=awal, masuk=mc, keluar=kc, akhir=awal + mc - kc,
+                        masuk_dept=dept_str(md.get(j, [])), keluar_dept=dept_str(kd.get(j, []))))
     return out
 
 def add_total(rows, **extra):
-    tot = dict(jenis="TOTAL", total=True, **extra)
+    tot = dict(jenis="TOTAL", total=True, masuk_dept="", keluar_dept="", **extra)
     for k in ("awal", "masuk", "keluar", "akhir"):
         tot[k] = sum(r[k] for r in rows)
     return tot
@@ -926,6 +1048,7 @@ def stock_data(db, f, t, mode):
         while d <= d1:
             day = d.isoformat()
             rows = stock_range(db, day, day)
+            rows = [r for r in rows if r["masuk"] or r["keluar"]]  # lewati jenis tanpa aktivitas pada hari itu
             for r in rows:
                 r["tanggal"] = day
             out += rows
@@ -948,7 +1071,8 @@ def date_args():
 def api_stok():
     f, t = date_args()
     mode = request.args.get("mode", "ringkas")
-    return jsonify(rows=stock_data(get_db(), f, t, mode), **{"from": f, "to": t}, mode=mode)
+    data = stock_data(get_db(), f, t, mode)
+    return jsonify(rows=data, **{"from": f, "to": t}, mode=mode)
 
 BY = {"tanggal": ("t.tgl_produksi", "Tanggal"), "nama": ("r_nama.nama", "Nama"), "jenis": ("rj.nama", "Jenis"),
       "motif": ("r_kode_motif.kode_motif || ' - ' || r_kode_motif.nama_motif", "Motif"),
@@ -974,6 +1098,28 @@ def api_rekap():
     f, t = date_args()
     label, rows = rekap_data(get_db(), f, t, request.args.get("by", "tanggal"))
     return jsonify(rows=rows, label=label, cats=CATS)
+
+LINE_BY = {"tanggal": ("d.tanggal", "Tanggal"), "dept": ("dp.nama", "Dept"), "jenis": ("j.nama", "Jenis"),
+           "motif": ("m.kode_motif || ' - ' || m.nama_motif", "Motif"), "ket": ("k.nama", "Ket"),
+           "pengrajin": ("COALESCE(pg.nama,'-')", "Nama Pengrajin")}
+
+def rekap_lines_data(db, arah, f, t, by):
+    expr, label = LINE_BY.get(by, LINE_BY["tanggal"])
+    rows = db.execute(f"""SELECT COALESCE({expr},'-') grp, COUNT(*) baris, COUNT(DISTINCT d.id) sstb, SUM(i.jumlah) jumlah
+        {LINE_FROM} WHERE d.arah=? AND d.tanggal>=? AND d.tanggal<=?
+        GROUP BY grp ORDER BY grp""", (arah, f, t)).fetchall()
+    rows = [dict(r) for r in rows]
+    if rows:
+        rows.append({"grp": "TOTAL", "total": True, "baris": sum(r["baris"] for r in rows),
+                     "sstb": sum(r["sstb"] for r in rows), "jumlah": sum(r["jumlah"] or 0 for r in rows)})
+    return label, rows
+
+@app.get("/api/rekap/<name>")
+def api_rekap_lines(name):
+    arah = arah_or_404(name)
+    f, t = date_args()
+    label, rows = rekap_lines_data(get_db(), arah, f, t, request.args.get("by", "tanggal"))
+    return jsonify(rows=rows, label=label)
 
 # --------------------------------------------------------------------------
 # Excel
@@ -1016,7 +1162,7 @@ def export_key(key):
     if key == "stok":
         return export_stok()
     if key == "rekap":
-        return export_rekap()
+        return export_rekap(request.args.get("arah"))
     if key in ARAH:
         return export_lines(key)
     s = spec_or_404(key)
@@ -1059,7 +1205,7 @@ def export_stok():
     rows = stock_data(get_db(), f, t, mode)
     wb = Workbook(); ws = wb.active; ws.title = "Posisi Stok"
     harian = mode == "harian"
-    ncol = 7 if harian else 6
+    ncol = 9 if harian else 8
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncol)
     ws["A1"] = "LAPORAN POSISI STOCK GRADE"
     ws["A1"].font = Font(bold=True, size=14); ws["A1"].alignment = Alignment(horizontal="center")
@@ -1068,29 +1214,49 @@ def export_stok():
     if f == t:
         ws["A2"].number_format = "d-mmm-yy"
     ws["A2"].alignment = Alignment(horizontal="center")
-    labels = (["Tanggal"] if harian else []) + ["No", "Jenis", "Saldo Awal", "Masuk", "Keluar", "Saldo Akhir"]
+    labels = (["Tanggal"] if harian else []) + \
+             ["No", "Jenis", "Saldo Awal", "Masuk", "Dari Dept", "Keluar", "Ke Dept", "Saldo Akhir"]
     hdr(ws, 4, labels, ["4472C4"] * len(labels))
     n = 0
     for r in rows:
         if not r.get("total"):
             n += 1
         line = ([dt.date.fromisoformat(r["tanggal"])] if harian else []) + \
-               ["" if r.get("total") else n, r["jenis"], r["awal"], r["masuk"], r["keluar"], r["akhir"]]
+               ["" if r.get("total") else n, r["jenis"], r["awal"], r["masuk"], r.get("masuk_dept", ""),
+                r["keluar"], r.get("keluar_dept", ""), r["akhir"]]
         ws.append(line)
         rr = ws.max_row
+        numcols = {len(line) - 5, len(line) - 4, len(line) - 2, len(line)}  # Saldo Awal, Masuk, Keluar, Saldo Akhir
         for i in range(1, len(line) + 1):
             c = ws.cell(row=rr, column=i); c.border = BORDER
             if harian and i == 1:
                 c.number_format = "dd-mmm-yy"
-            if i >= len(line) - 3:
+            if i in numcols:
                 c.number_format = NUM_FMT
             if r.get("total"):
                 c.font = Font(bold=True); c.fill = PatternFill("solid", fgColor="D9E1F2")
-    widths(ws, ([12] if harian else []) + [6, 24, 14, 14, 14, 14])
+    widths(ws, ([12] if harian else []) + [6, 22, 12, 11, 28, 11, 28, 12])
     return send_wb(wb, f"posisi_stok_{f}_{t}.xlsx")
 
-def export_rekap():
+def export_rekap(name=None):
     f, t = date_args()
+    if name in ARAH:
+        arah = ARAH[name]
+        label, rows = rekap_lines_data(get_db(), arah, f, t, request.args.get("by", "tanggal"))
+        wb = Workbook(); ws = wb.active; ws.title = f"Rekap {DOC_TITLE[name]}"
+        labels = [label, "Baris", "SSTB", "Jumlah"]
+        hdr(ws, 1, labels, [DOC_COLOR[name]] * len(labels))
+        for r in rows:
+            ws.append([r["grp"], r["baris"], r["sstb"], r["jumlah"] or 0])
+            for i in range(1, len(labels) + 1):
+                c = ws.cell(row=ws.max_row, column=i); c.border = BORDER
+                if i > 1:
+                    c.number_format = NUM_FMT
+                if r.get("total"):
+                    c.font = Font(bold=True); c.fill = PatternFill("solid", fgColor="D9E1F2")
+        widths(ws, [30, 8, 8, 12])
+        ws.freeze_panes = "B2"
+        return send_wb(wb, f"rekap_{name}_{f}_{t}.xlsx")
     label, rows = rekap_data(get_db(), f, t, request.args.get("by", "tanggal"))
     wb = Workbook(); ws = wb.active; ws.title = "Rekap Produksi"
     labels = [label, "Baris"] + [c.capitalize() for c in CATS] + ["Jumlah"]

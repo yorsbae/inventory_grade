@@ -147,7 +147,7 @@ function makeNotifier(el) {
     if (cls === 'ok' && !sticky) t = setTimeout(() => { el.className = 'msg'; el.textContent = ''; }, 4000);
   };
 }
-function ioTools(key, onDone, notify, impBox) {
+function ioTools(key, onDone, notify, impBox, hideTemplate) {
   const file = h('input', { type: 'file', accept: '.xlsx', style: 'display:none' });
   file.onchange = async () => {
     if (!file.files[0]) return;
@@ -163,7 +163,7 @@ function ioTools(key, onDone, notify, impBox) {
   return {
     exp,
     els: [h('button', { class: 'btn', onclick: () => file.click() }, 'Import Excel'), file,
-          h('a', { class: 'btn', href: '/template/' + key }, 'Template'), exp]
+          hideTemplate ? null : h('a', { class: 'btn', href: '/template/' + key }, 'Template'), exp].filter(Boolean)
   };
 }
 function pagerInto(el, page, pages, total, extra, go, size, onSize) {
@@ -195,17 +195,18 @@ function searchBox(state, onChange, placeholder) {
   inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); clearTimeout(t); state.q = inp.value.trim(); onChange(); } });
   return h('label', { class: 'searchbox' }, 'Cari', inp);
 }
-/* "view by kategori": filter berdasarkan Jenis, hanya untuk tabel yang punya kolom Jenis */
-let JENIS_CACHE = null;
-async function jenisOptions() {
-  if (!JENIS_CACHE) JENIS_CACHE = (await (await fetch('/api/opt/jenis?limit=200')).json()).map(x => x.v);
-  return JENIS_CACHE;
+/* "view by kategori": filter per tabel — Jenis untuk Motif/Stok Awal/Produksi, Dept untuk Barang Masuk/Keluar */
+const CAT_CACHE = {};
+async function catOptions(src) {
+  if (!CAT_CACHE[src]) CAT_CACHE[src] = (await (await fetch('/api/opt/' + src + '?limit=200')).json()).map(x => x.v);
+  return CAT_CACHE[src];
 }
-function categoryFilter(state, onChange) {
-  const sel = h('select', {}, h('option', { value: '' }, 'Semua Jenis'));
-  sel.addEventListener('change', () => { state.jenis = sel.value; onChange(); });
-  jenisOptions().then(list => {
-    for (const v of list) sel.append(h('option', { value: v, selected: v === state.jenis }, v));
+function categoryFilter(state, onChange, src, key, labelAll) {
+  src = src || 'jenis'; key = key || 'jenis';
+  const sel = h('select', {}, h('option', { value: '' }, labelAll || ('Semua ' + (src === 'dept' ? 'Dept' : 'Jenis'))));
+  sel.addEventListener('change', () => { state[key] = sel.value; onChange(); });
+  catOptions(src).then(list => {
+    for (const v of list) sel.append(h('option', { value: v, selected: v === state[key] }, v));
   });
   return h('label', { class: 'catfilter' }, 'Kategori', sel);
 }
@@ -232,31 +233,101 @@ function applyColVis(theadRow, tbody, cols, vis) {
     [...tr.children].forEach((td, i) => { if (i < cols.length) td.style.display = vis[cols[i].n] === false ? 'none' : ''; });
   });
 }
+
+/* filter kolom ala Excel: tombol kecil di judul kolom membuka daftar nilai unik yang bisa dicentang */
+let CURRENT_COLFILT = null;
+function closeAnyColumnFilter() { if (CURRENT_COLFILT) CURRENT_COLFILT(); }
+async function openColumnFilter(anchor, o) {
+  // o: {label, selected: string[] (kosong = tidak difilter), fetchList: async()=>string[], onApply: (vals)=>void}
+  closeAnyColumnFilter();
+  const search = h('input', { type: 'search', placeholder: 'Cari nilai…' });
+  const list = h('div', { class: 'cf-list' }, h('div', { class: 'cf-empty' }, 'Memuat…'));
+  const countLbl = h('small', { class: 'cf-count' }, '');
+  let all = [], checked = new Set();
+  function renderList(filterText) {
+    list.innerHTML = '';
+    const ft = (filterText || '').trim().toLowerCase();
+    const shown = ft ? all.filter(v => String(v).toLowerCase().includes(ft)) : all;
+    if (!shown.length) { list.append(h('div', { class: 'cf-empty' }, 'Tidak ada nilai.')); return; }
+    for (const v of shown) {
+      const cb = h('input', { type: 'checkbox', checked: checked.has(v) });
+      cb.addEventListener('change', () => {
+        if (cb.checked) checked.add(v); else checked.delete(v);
+        countLbl.textContent = `${checked.size}/${all.length} dipilih`;
+      });
+      list.append(h('label', { class: 'cf-item' }, cb, h('span', {}, v === '' ? '(kosong)' : v)));
+    }
+  }
+  const visible = () => { const ft = search.value.trim().toLowerCase(); return ft ? all.filter(v => String(v).toLowerCase().includes(ft)) : all; };
+  search.addEventListener('input', () => renderList(search.value));
+  const selAll = h('button', { type: 'button', class: 'linklike', onclick: () => { visible().forEach(v => checked.add(v)); renderList(search.value); countLbl.textContent = `${checked.size}/${all.length} dipilih`; } }, 'Pilih Semua');
+  const selNone = h('button', { type: 'button', class: 'linklike', onclick: () => { visible().forEach(v => checked.delete(v)); renderList(search.value); countLbl.textContent = `${checked.size}/${all.length} dipilih`; } }, 'Kosongkan');
+  const box = h('div', { class: 'colfiltpop' },
+    h('div', { class: 'cf-title' }, 'Filter ', h('b', {}, o.label)),
+    h('div', { class: 'cf-search' }, search),
+    h('div', { class: 'cf-actions' }, selAll, selNone, h('span', { class: 'grow' }), countLbl),
+    list,
+    h('div', { class: 'cf-foot' },
+      h('button', { class: 'btn sm', onclick: () => { close(); o.onApply([]); } }, 'Hapus Filter'),
+      h('span', { class: 'grow' }),
+      h('button', { class: 'btn sm', onclick: () => close() }, 'Batal'),
+      h('button', { class: 'btn sm primary', onclick: () => {
+        const result = (checked.size === all.length) ? [] : [...checked];  // semua tercentang = sama dengan tidak difilter
+        close(); o.onApply(result);
+      } }, 'Terapkan')));
+  document.body.append(box);
+  const r = anchor.getBoundingClientRect(), m = 8, w = 250;
+  const vw = document.documentElement.clientWidth, vh = window.innerHeight;
+  box.style.left = Math.max(m, Math.min(r.left, vw - m - w)) + 'px';
+  box.style.top = Math.min(r.bottom + 4, vh - m - 80) + 'px';
+  function close() { box.remove(); document.removeEventListener('mousedown', onDoc); CURRENT_COLFILT = null; }
+  function onDoc(e) { if (!box.contains(e.target) && e.target !== anchor && !anchor.contains(e.target)) close(); }
+  setTimeout(() => document.addEventListener('mousedown', onDoc), 0);
+  CURRENT_COLFILT = close;
+  all = await o.fetchList();
+  checked = new Set(o.selected && o.selected.length ? o.selected.filter(v => all.includes(v)) : all);
+  countLbl.textContent = `${checked.size}/${all.length} dipilih`;
+  renderList('');
+}
+/* judul kolom tabel: teks (klik = urutkan asc/desc) + tombol kecil ▾ (klik = buka filter ala Excel) */
+function thCell(label, opts) {
+  const { align, active, sortOn, onSort, onFilter } = opts || {};
+  const lab = h('span', { class: 'th-label', onclick: onSort }, label, sortOn ? h('i', { class: 'th-sort' }, sortOn === 'asc' ? ' \u25B2' : ' \u25BC') : null);
+  const kids = [lab];
+  if (onFilter) {
+    const btn = h('button', { type: 'button', class: 'th-filt' + (active ? ' active' : ''), title: 'Filter kolom ' + label,
+      onclick: e => { e.stopPropagation(); onFilter(btn); } }, '▾');
+    kids.push(btn);
+  }
+  return h('th', { class: align || '' }, h('span', { class: 'th-wrap' }, kids));
+}
 /* cetak SSTB dengan tata letak seperti formulir kertas Surat Serah Terima Barang */
 function printSSTB(doc, label) {
-  const rows = (doc.items || []).map(it => `<tr><td>${esc(it.kode_motif)}</td><td>${esc(it.ket || '')}</td>
-    <td class="num">${fmtNum(it.jumlah)}</td><td>${esc(it.link_produksi ? it.link_produksi.replace(/#\d+$/, '').trim() : '')}</td></tr>`).join('');
-  const total = (doc.items || []).reduce((s, it) => s + (parseInt(it.jumlah) || 0), 0);
-  const hasLink = (doc.items || []).some(it => it.link_produksi);
+  const items = doc.items || [];
+  const hasLink = items.some(it => it.link_produksi);  // kolom ke-4 hanya ada kalau benar2 dipakai
+  const rows = items.map(it => `<tr><td>${esc(it.kode_motif)}</td><td>${esc(it.ket || '')}</td>
+    <td class="num">${fmtNum(it.jumlah)}</td>${hasLink ? `<td>${esc(it.link_produksi ? it.link_produksi.replace(/#\d+$/, '').trim() : '')}</td>` : ''}</tr>`).join('');
+  const total = items.reduce((s, it) => s + (parseInt(it.jumlah) || 0), 0);
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>SSTB ${esc(doc.sstb)}</title>
 <style>
+@page{size:A5;margin:10mm}
 *{box-sizing:border-box;font-family:Arial,Helvetica,sans-serif}
-body{margin:24px;color:#111}
-h1{font-size:17px;text-align:center;margin:0 0 2px;text-transform:uppercase;letter-spacing:.5px}
-h2{font-size:13px;text-align:center;margin:0 0 16px;font-weight:normal;color:#444}
-.hdr{display:flex;justify-content:space-between;margin-bottom:16px;font-size:12px;border:1px solid #333;padding:10px 14px}
-.hdr div{line-height:1.7}
-.hdr b{display:inline-block;min-width:70px}
-table{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:8px}
-th,td{border:1px solid #333;padding:6px 8px}
+body{margin:16px;color:#111;max-width:480px}
+h1{font-size:14px;text-align:center;margin:0 0 2px;text-transform:uppercase;letter-spacing:.5px}
+h2{font-size:11px;text-align:center;margin:0 0 10px;font-weight:normal;color:#444}
+.hdr{display:flex;justify-content:space-between;gap:10px;margin-bottom:10px;font-size:10.5px;border:1px solid #333;padding:7px 10px}
+.hdr div{line-height:1.6;min-width:0}
+.hdr b{display:inline-block;min-width:60px}
+table{width:100%;table-layout:fixed;border-collapse:collapse;font-size:10.5px;margin-bottom:6px}
+th,td{border:1px solid #333;padding:4px 6px;vertical-align:top;overflow-wrap:break-word;word-break:break-word}
 th{background:#eee;text-align:left}
-td.num{text-align:right}
+td.num,th.num{text-align:right}
 tfoot td{font-weight:bold;background:#f7f7f7}
-.sig{display:flex;justify-content:space-between;margin-top:60px;font-size:12px}
+.sig{display:flex;justify-content:space-between;margin-top:36px;font-size:10.5px}
 .sig div{width:45%;text-align:center}
-.sig .line{margin-top:56px;border-top:1px solid #333;padding-top:4px}
-.foot{margin-top:10px;font-size:10px;color:#777;text-align:right}
-@media print{body{margin:10mm}}
+.sig .line{margin-top:32px;border-top:1px solid #333;padding-top:4px}
+.foot{margin-top:8px;font-size:9px;color:#777;text-align:right}
+@media print{body{margin:0;max-width:none}}
 </style></head><body>
 <h1>Surat Serah Terima Barang</h1>
 <h2>${esc(label)}</h2>
@@ -264,7 +335,7 @@ tfoot td{font-weight:bold;background:#f7f7f7}
   <div><b>No SSTB</b> ${esc(doc.sstb)}<br><b>Dept</b> ${esc(doc.dept || '-')}</div>
   <div style="text-align:right"><b>Tanggal</b> ${fmtDate(doc.tanggal)}<br><b>Pengrajin</b> ${esc(doc.pengrajin || '-')}</div>
 </div>
-<table><thead><tr><th>Motif</th><th>Ket</th><th>Jumlah</th>${hasLink ? '<th>Sumber Produksi</th>' : ''}</tr></thead>
+<table><thead><tr><th>Motif</th><th>Ket</th><th class="num">Jumlah</th>${hasLink ? '<th>Sumber Produksi</th>' : ''}</tr></thead>
 <tbody>${rows}</tbody>
 <tfoot><tr><td colspan="2">TOTAL</td><td class="num">${fmtNum(total)}</td>${hasLink ? '<td></td>' : ''}</tr></tfoot>
 </table>
@@ -282,14 +353,152 @@ tfoot td{font-weight:bold;background:#f7f7f7}
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
 /* tabel yang boleh difilter per Jenis ("view by kategori") */
-const JENIS_FILTER_KEYS = ['motif', 'opening', 'produksi'];
+const JENIS_FILTER_KEYS = ['motif', 'opening'];
+
+/* ===========================================================================
+   Panel "Filter" terpadu — dipakai bersama oleh Barang Masuk, Produksi, Barang
+   Keluar: Cari + semua dropdown field + rentang Jumlah + Urut + Kelompokkan,
+   semuanya dalam satu tombol, supaya pengalamannya konsisten di 3 halaman itu.
+   =========================================================================== */
+function newFilterState() { return { q: '', filters: {}, ranges: {}, sort: '', dir: 'desc', group: '' }; }
+function filterActiveCount(st) {
+  let n = st.q ? 1 : 0;
+  n += Object.keys(st.filters).length;
+  n += Object.values(st.ranges).filter(r => r && (r.min !== undefined || r.max !== undefined)).length;
+  if (st.sort) n++;
+  if (st.group) n++;
+  return n;
+}
+function buildFilterToolbarItem(inst, cfg) {
+  // inst: instance dengan inst.pstate, inst.page, inst.load(). cfg: lihat pemanggilnya (Crud/DocPage).
+  const btn = h('button', { type: 'button', class: 'btn' }, '🔍 Filter');
+  const chipsRow = h('div', { class: 'chips filterchips' });
+  function refresh() {
+    const n = filterActiveCount(inst.pstate);
+    btn.textContent = n ? `🔍 Filter (${n})` : '🔍 Filter';
+    chipsRow.innerHTML = '';
+    const st = inst.pstate;
+    const fieldLbl = {}; cfg.fields.forEach(f => { fieldLbl[f.n] = f.l; });
+    const sortLbl = {}; cfg.sortFields.forEach(f => { sortLbl[f.n] = f.l; });
+    const groupLbl = {}; cfg.groupFields.forEach(f => { groupLbl[f.n] = f.l; });
+    const chips = [];
+    if (st.q) chips.push(`Cari: "${st.q}"`);
+    for (const [k, v] of Object.entries(st.filters)) chips.push(`${fieldLbl[k] || k}: ${v[0]}`);
+    for (const [k, r] of Object.entries(st.ranges)) {
+      if (r && (r.min !== undefined || r.max !== undefined))
+        chips.push(`${(cfg.rangeField && cfg.rangeField.n === k) ? cfg.rangeField.l : k}: ${r.min ?? ''}–${r.max ?? ''}`);
+    }
+    if (st.sort) chips.push(`Urut: ${sortLbl[st.sort] || st.sort} ${st.dir === 'asc' ? '↑' : '↓'}`);
+    if (st.group) chips.push(`Kelompok: ${groupLbl[st.group] || st.group}`);
+    for (const c of chips) chipsRow.append(h('span', { class: 'chip' }, c));
+  }
+  btn.addEventListener('click', () => openFilterModal(inst, cfg, refresh));
+  inst._refreshFilterUI = refresh;
+  refresh();
+  return { btn, chipsRow };
+}
+function openFilterModal(inst, cfg, refreshToolbar) {
+  const st = inst.pstate;
+  const qInput = h('input', { type: 'text', value: st.q, placeholder: cfg.searchPlaceholder || 'Cari…' });
+  const grid = h('div', { class: 'form-grid' });
+  const selects = {};
+  for (const f of cfg.fields) {
+    const sel = h('select', {}, h('option', { value: '' }, 'Semua'));
+    sel.disabled = true;
+    selects[f.n] = sel;
+    grid.append(h('label', {}, f.l, sel));
+    cfg.fetchDistinct(f.n).then(vals => {
+      sel.disabled = false;
+      const cur = (st.filters[f.n] || [])[0];
+      for (const v of vals) sel.append(h('option', { value: v, selected: cur === v }, v));
+    });
+  }
+  let minInp, maxInp;
+  if (cfg.rangeField) {
+    const r = st.ranges[cfg.rangeField.n] || {};
+    minInp = h('input', { type: 'number', value: r.min ?? '', placeholder: 'Minimal' });
+    maxInp = h('input', { type: 'number', value: r.max ?? '', placeholder: 'Maksimal' });
+    grid.append(h('label', {}, cfg.rangeField.l + ' Minimal', minInp), h('label', {}, cfg.rangeField.l + ' Maksimal', maxInp));
+  }
+  const sortSel = h('select', {}, h('option', { value: '' }, 'Default'),
+    cfg.sortFields.map(f => h('option', { value: f.n, selected: st.sort === f.n }, f.l)));
+  const dirSel = h('select', {}, h('option', { value: 'desc', selected: st.dir !== 'asc' }, 'Descending ↓'),
+    h('option', { value: 'asc', selected: st.dir === 'asc' }, 'Ascending ↑'));
+  const groupSel = h('select', {}, h('option', { value: '' }, 'Tidak ada'),
+    cfg.groupFields.map(f => h('option', { value: f.n, selected: st.group === f.n }, f.l)));
+  const body = h('div', {},
+    h('label', { class: 'span2' }, 'Cari', qInput),
+    grid,
+    h('h3', { class: 'sub' }, 'Urutkan & Kelompokkan'),
+    h('div', { class: 'form-grid' },
+      h('label', {}, 'Urut berdasarkan', sortSel), h('label', {}, 'Urutan', dirSel),
+      h('label', {}, 'Kelompokkan berdasarkan', groupSel)));
+  const apply = () => {
+    st.q = qInput.value.trim();
+    st.filters = {};
+    for (const f of cfg.fields) if (selects[f.n].value) st.filters[f.n] = [selects[f.n].value];
+    st.ranges = {};
+    if (cfg.rangeField) {
+      const r = {};
+      if (minInp.value !== '') r.min = minInp.value;
+      if (maxInp.value !== '') r.max = maxInp.value;
+      if (r.min !== undefined || r.max !== undefined) st.ranges[cfg.rangeField.n] = r;
+    }
+    st.sort = sortSel.value; st.dir = dirSel.value; st.group = groupSel.value;
+    modal.close(); refreshToolbar(); inst.page = 1; inst.load();
+  };
+  const foot = [
+    h('button', { class: 'btn', onclick: () => {
+      Object.assign(st, newFilterState());
+      modal.close(); refreshToolbar(); inst.page = 1; inst.load();
+    } }, 'Reset'),
+    h('span', { class: 'grow' }),
+    h('button', { class: 'btn', onclick: () => modal.close() }, 'Batal'),
+    h('button', { class: 'btn primary', onclick: apply }, 'Terapkan Filter')
+  ];
+  const modal = openModal('Filter ' + cfg.title, body, foot);
+}
+
+/* tabel dengan opsi Kelompokkan (Group By): satu <tbody> per kelompok supaya baris bisa dilipat/dibuka */
+function renderGroupedTable(table, rows, groupCol, colspan, rowFn, emptyMsg) {
+  [...table.querySelectorAll('tbody')].forEach(tb => tb.remove());
+  if (!rows.length) {
+    table.append(h('tbody', {}, h('tr', { class: 'none' }, h('td', { class: 'empty', colspan }, emptyMsg))));
+    return;
+  }
+  if (!groupCol) {
+    const tb = h('tbody');
+    for (const row of rows) tb.append(rowFn(row));
+    table.append(tb);
+    return;
+  }
+  const counts = {};
+  for (const row of rows) { const k = row[groupCol] || '(kosong)'; counts[k] = (counts[k] || 0) + 1; }
+  let curKey = null, tb = null;
+  for (const row of rows) {
+    const key = row[groupCol] || '(kosong)';
+    if (key !== curKey) {
+      curKey = key;
+      const head = h('tr', { class: 'grouphead' }, h('td', { colspan },
+        h('button', { type: 'button', class: 'grouptoggle', onclick: e => {
+          const b = e.currentTarget, tbb = b.closest('tbody'); tbb.classList.toggle('collapsed');
+          b.querySelector('.gi').textContent = tbb.classList.contains('collapsed') ? '▶' : '▼';
+        } }, h('span', { class: 'gi' }, '▼'), ` ${key} `, h('small', {}, `(${counts[key]})`))));
+      tb = h('tbody', { class: 'grp' }, head);
+      table.append(tb);
+    }
+    tb.append(rowFn(row));
+  }
+}
 
 /* ===== Crud: master + produksi (daftar + form overlay) ===== */
 class Crud {
   constructor(root, key, o = {}) {
     this.root = root; this.key = key; this.o = o; this.page = 1; this.size = PAGE_SIZES[0]; this.sort = ''; this.dir = 'desc';
     this.range = o.range || { from: defaultFrom(), to: todayISO() };
-    this.qstate = { q: '' }; this.catstate = { jenis: '' }; this.sticky = {}; this.ready = this.init();
+    this.qstate = { q: '' }; this.catstate = { jenis: '' }; this.filters = {}; this.sticky = {};
+    this.pstate = o.filterPanel ? newFilterState() : null;  // panel "Filter" terpadu (Produksi); tabel master pakai cara lama
+    this.ready = this.init();
   }
   async init() {
     this.meta = await (await fetch('/api/meta/' + this.key)).json();
@@ -302,51 +511,93 @@ class Crud {
     const tb = h('div', { class: 'toolbar' });
     if (!this.o.hideAdd) tb.append(h('button', { class: 'btn primary', onclick: () => this.openForm() }, '+ Tambah'));
     if (m.datecol && !this.o.noRange) tb.append(...rangeInputs(this.range, () => { this.page = 1; this.load(); }));
-    tb.append(searchBox(this.qstate, () => { this.page = 1; this.load(); }));
-    if (JENIS_FILTER_KEYS.includes(this.key)) tb.append(categoryFilter(this.catstate, () => { this.page = 1; this.load(); }));
-    tb.append(h('span', { class: 'grow' }));
-    const io = ioTools(this.key, () => { this.load(); if (this.o.onChange) this.o.onChange(); }, this.notify, this.impBox);
-    this.exp = io.exp; tb.append(...io.els);
-    const cc = colChecklist(this.key, m.cols, vis => { this.colvis = vis; this.applyVis(); });
-    tb.append(cc.el);
-    this.thead = h('thead'); this.tbody = h('tbody');
-    this.theadRow = h('tr');
-    for (const c of m.cols) this.theadRow.append(h('th', {
-      onclick: () => { this.dir = (this.sort === c.n && this.dir === 'desc') ? 'asc' : 'desc'; this.sort = c.n; this.load(); }
-    }, c.l));
-    this.theadRow.append(h('th', {}, 'Aksi')); this.thead.append(this.theadRow);
+    if (this.pstate) {
+      tb.append(h('span', { class: 'grow' }));
+      const io = ioTools(this.key, () => { this.load(); if (this.o.onChange) this.o.onChange(); }, this.notify, this.impBox, true);
+      this.exp = io.exp;
+      const fi = buildFilterToolbarItem(this, this.o.filterPanel);
+      tb.append(fi.btn, ...io.els);
+      this.chipsRow = fi.chipsRow;
+    } else {
+      tb.append(searchBox(this.qstate, () => { this.page = 1; this.load(); }));
+      if (JENIS_FILTER_KEYS.includes(this.key)) tb.append(categoryFilter(this.catstate, () => { this.page = 1; this.load(); }));
+      tb.append(h('span', { class: 'grow' }));
+      const io = ioTools(this.key, () => { this.load(); if (this.o.onChange) this.o.onChange(); }, this.notify, this.impBox);
+      this.exp = io.exp; tb.append(...io.els);
+      const cc = colChecklist(this.key, m.cols, vis => { this.colvis = vis; this.applyVis(); });
+      tb.append(cc.el);
+    }
+    this.thead = h('thead'); this.theadRow = h('tr'); this.thead.append(this.theadRow); this.tbody = h('tbody');
+    this.table = h('table', { class: 'resp' }, this.thead, this.tbody);
+    if (this.pstate) {
+      for (const c of m.cols) this.theadRow.append(h('th', { class: this.isInt(c) ? 'num' : '' }, c.l));
+      this.theadRow.append(h('th', {}, 'Aksi'));
+    } else {
+      this.refreshHead();
+    }
     this.pager = h('div', { class: 'pager' });
-    this.root.append(tb, this.msg, this.impBox,
-      h('div', { class: 'tablewrap' }, h('table', { class: 'resp' }, this.thead, this.tbody)), this.pager);
+    this.root.append(tb, this.chipsRow || '', this.msg, this.impBox,
+      h('div', { class: 'tablewrap' }, this.table), this.pager);
+  }
+  refreshHead() {
+    this.theadRow.innerHTML = '';
+    for (const c of this.meta.cols) this.theadRow.append(thCell(c.l, {
+      align: this.isInt(c) ? 'num' : '', sortOn: this.sort === c.n ? this.dir : null,
+      onSort: () => { this.dir = (this.sort === c.n && this.dir === 'desc') ? 'asc' : 'desc'; this.sort = c.n; this.load(); },
+      active: !!(this.filters[c.n] && this.filters[c.n].length),
+      onFilter: btn => openColumnFilter(btn, {
+        label: c.l, selected: this.filters[c.n] || [],
+        fetchList: async () => await (await fetch(`/api/distinct/${this.key}?col=${c.n}&` + this.params())).json(),
+        onApply: vals => {
+          if (vals.length) this.filters[c.n] = vals; else delete this.filters[c.n];
+          this.page = 1; this.load();
+        }
+      })
+    }));
+    this.theadRow.append(h('th', {}, 'Aksi'));
   }
   applyVis() { if (this.colvis) applyColVis(this.theadRow, this.tbody, this.meta.cols, this.colvis); }
   params(extra) {
     const p = new URLSearchParams(extra || {});
     for (const [k, v] of Object.entries(this.range)) if (v) p.set(k, v);
-    if (this.qstate.q) p.set('q', this.qstate.q);
-    if (this.catstate.jenis) p.set('jenis', this.catstate.jenis);
-    if (this.sort) { p.set('sort', this.sort); p.set('dir', this.dir); }
+    if (this.pstate) {
+      const st = this.pstate;
+      if (st.q) p.set('q', st.q);
+      if (Object.keys(st.filters).length) p.set('filters', JSON.stringify(st.filters));
+      if (Object.keys(st.ranges).length) p.set('ranges', JSON.stringify(st.ranges));
+      if (st.sort) { p.set('sort', st.sort); p.set('dir', st.dir); }
+      if (st.group) p.set('group', st.group);
+    } else {
+      if (this.qstate.q) p.set('q', this.qstate.q);
+      if (this.catstate.jenis) p.set('jenis', this.catstate.jenis);
+      if (Object.keys(this.filters).length) p.set('filters', JSON.stringify(this.filters));
+      if (this.sort) { p.set('sort', this.sort); p.set('dir', this.dir); }
+    }
     return p;
   }
   isInt(c) { return c.t === 'int' || c.num; }
+  rowEl(row) {
+    const tr = h('tr');
+    for (const c of this.meta.cols) {
+      const v = row[c.n];
+      tr.append(h('td', { class: this.isInt(c) ? 'num' : '', 'data-label': c.l },
+        this.isInt(c) ? fmtNum(v) : c.t === 'date' ? fmtDate(v) : v == null ? '' : v));
+    }
+    tr.append(h('td', { class: 'act', 'data-label': 'Aksi' },
+      h('button', { class: 'btn sm', onclick: () => this.openForm(row) }, 'Edit'), ' ',
+      h('button', { class: 'btn sm danger', onclick: () => this.del(row) }, 'Hapus')));
+    return tr;
+  }
   async load() {
+    if (!this.pstate) this.refreshHead();
     const r = await (await fetch('/api/' + this.key + '?' + this.params({ page: this.page, size: this.size }))).json();
     this.exp.href = '/export/' + this.key + '?' + this.params();
-    this.tbody.innerHTML = '';
-    if (!r.rows.length) this.tbody.append(h('tr', { class: 'none' }, h('td', { class: 'empty', colspan: this.meta.cols.length + 1 },
-      (this.qstate.q || this.catstate.jenis) ? 'Tidak ada data yang cocok dengan filter.' : 'Belum ada data.')));
-    for (const row of r.rows) {
-      const tr = h('tr');
-      for (const c of this.meta.cols) {
-        const v = row[c.n];
-        tr.append(h('td', { class: this.isInt(c) ? 'num' : '', 'data-label': c.l },
-          this.isInt(c) ? fmtNum(v) : c.t === 'date' ? fmtDate(v) : v == null ? '' : v));
-      }
-      tr.append(h('td', { class: 'act', 'data-label': 'Aksi' },
-        h('button', { class: 'btn sm', onclick: () => this.openForm(row) }, 'Edit'), ' ',
-        h('button', { class: 'btn sm danger', onclick: () => this.del(row) }, 'Hapus')));
-      this.tbody.append(tr);
-    }
+    const filterActive = this.pstate ? filterActiveCount(this.pstate) > 0
+      : (this.qstate.q || this.catstate.jenis || Object.keys(this.filters).length);
+    const emptyMsg = filterActive ? 'Tidak ada data yang cocok dengan filter.' : 'Belum ada data.';
+    renderGroupedTable(this.table, r.rows, this.pstate ? this.pstate.group : null, this.meta.cols.length + 1,
+      row => this.rowEl(row), emptyMsg);
+    this.tbody = this.table.querySelector('tbody');
     pagerInto(this.pager, this.page, r.pages, r.total, r.sum != null ? ` · Total jumlah: ${r.sum.toLocaleString('id-ID')}` : '',
       p => { this.page = p; this.load(); }, this.size, n => { this.size = n; this.page = 1; this.load(); });
     this.applyVis();
@@ -431,42 +682,72 @@ class DocPage {
     this.root = root; this.arah = arah; this.keluar = arah === 'keluar';
     this.label = arah === 'masuk' ? 'Barang Masuk' : 'Barang Keluar';
     this.cols = DOC_COLS_BASE.concat(this.keluar ? [['link_produksi', 'Link Produksi']] : []);
-    this.page = 1; this.size = PAGE_SIZES[0]; this.sort = ''; this.dir = 'desc'; this.sticky = {};
+    this.page = 1; this.size = PAGE_SIZES[0]; this.sticky = {};
     this.range = { from: defaultFrom(), to: todayISO() };
-    this.qstate = { q: '' }; this.catstate = { jenis: '' }; this.ready = this.init();
+    this.pstate = newFilterState();
+    /* field panel Filter, disesuaikan dengan kolom yang benar-benar ada di Barang Masuk/Keluar */
+    this.filterCfg = {
+      title: this.label,
+      searchPlaceholder: 'Cari SSTB, Dept, Motif, Jenis, Ket, Pengrajin, Rumus…',
+      fields: [
+        { n: 'dept', l: 'Departemen' }, { n: 'sstb', l: 'SSTB' },
+        { n: 'kode_motif', l: 'Kode Motif' }, { n: 'motif', l: 'Motif' },
+        { n: 'jenis', l: 'Jenis' }, { n: 'pengrajin', l: 'Nama Pengrajin' },
+        { n: 'rumus', l: 'Rumus' }, { n: 'ket', l: 'Keterangan' }
+      ].concat(this.keluar ? [{ n: 'link_produksi', l: 'Link Produksi' }] : []),
+      rangeField: { n: 'jumlah', l: 'Jumlah' },
+      sortFields: this.cols.map(([n, l]) => ({ n, l })),
+      groupFields: [['sstb', 'SSTB'], ['tanggal', 'Tanggal'], ['dept', 'Dept'], ['kode_motif', 'Kode Motif'],
+        ['motif', 'Motif'], ['jenis', 'Jenis'], ['pengrajin', 'Nama Pengrajin'], ['rumus', 'Rumus'], ['ket', 'Keterangan']]
+        .map(([n, l]) => ({ n, l })),
+      fetchDistinct: async col => await (await fetch(`/api/distinct/lines/${this.arah}?col=${col}&` + this.params())).json()
+    };
+    this.ready = this.init();
   }
   async init() { this.build(); await this.load(); }
   build() {
     this.msg = h('div', { class: 'msg' }); this.notify = makeNotifier(this.msg);
     this.impBox = h('div', { class: 'imp' });
     this.chips = h('div', { class: 'chips' });
+    const fi = buildFilterToolbarItem(this, this.filterCfg);
+    this.chipsRow = fi.chipsRow;
     const tb = h('div', { class: 'toolbar' },
       h('button', { class: 'btn primary', onclick: () => this.openForm() }, '+ Tambah ' + this.label),
       ...rangeInputs(this.range, () => { this.page = 1; this.load(); }),
-      searchBox(this.qstate, () => { this.page = 1; this.load(); }),
-      categoryFilter(this.catstate, () => { this.page = 1; this.load(); }),
+      fi.btn,
       h('span', { class: 'grow' }));
-    const io = ioTools(this.arah, () => this.load(), this.notify, this.impBox);
+    const io = ioTools(this.arah, () => this.load(), this.notify, this.impBox, true);
     this.exp = io.exp; tb.append(...io.els);
-    const cc = colChecklist(this.arah, this.cols.map(c => ({ n: c[0], l: c[1] })), vis => { this.colvis = vis; this.applyVis(); });
-    tb.append(cc.el);
     this.theadRow = h('tr');
-    for (const [n, l] of this.cols) this.theadRow.append(h('th', {
-      onclick: () => { this.dir = (this.sort === n && this.dir === 'desc') ? 'asc' : 'desc'; this.sort = n; this.load(); }
-    }, l));
+    for (const [n, l, k] of this.cols) this.theadRow.append(h('th', { class: k === 'int' ? 'num' : '' }, l));
     this.theadRow.append(h('th', {}, 'Aksi'));
     this.tbody = h('tbody'); this.pager = h('div', { class: 'pager' });
-    this.root.append(tb, this.chips, this.msg, this.impBox,
-      h('div', { class: 'tablewrap' }, h('table', { class: 'resp' }, h('thead', {}, this.theadRow), this.tbody)), this.pager);
+    this.table = h('table', { class: 'resp' }, h('thead', {}, this.theadRow), this.tbody);
+    this.root.append(tb, this.chipsRow, this.chips, this.msg, this.impBox,
+      h('div', { class: 'tablewrap' }, this.table), this.pager);
   }
-  applyVis() { if (this.colvis) applyColVis(this.theadRow, this.tbody, this.cols.map(c => ({ n: c[0] })), this.colvis); }
   params(extra) {
     const p = new URLSearchParams(extra || {});
     for (const [k, v] of Object.entries(this.range)) if (v) p.set(k, v);
-    if (this.qstate.q) p.set('q', this.qstate.q);
-    if (this.catstate.jenis) p.set('jenis', this.catstate.jenis);
-    if (this.sort) { p.set('sort', this.sort); p.set('dir', this.dir); }
+    const st = this.pstate;
+    if (st.q) p.set('q', st.q);
+    if (Object.keys(st.filters).length) p.set('filters', JSON.stringify(st.filters));
+    if (Object.keys(st.ranges).length) p.set('ranges', JSON.stringify(st.ranges));
+    if (st.sort) { p.set('sort', st.sort); p.set('dir', st.dir); }
+    if (st.group) p.set('group', st.group);
     return p;
+  }
+  rowEl(row) {
+    const tr = h('tr');
+    for (const [n, l, k] of this.cols) {
+      const v = row[n];
+      tr.append(h('td', { class: k === 'int' ? 'num' : '', 'data-label': l }, k === 'int' ? fmtNum(v) : k === 'date' ? fmtDate(v) : v == null ? '' : v));
+    }
+    tr.append(h('td', { class: 'act', 'data-label': 'Aksi' },
+      h('button', { class: 'btn sm', title: 'Edit seluruh SSTB ini', onclick: () => this.openForm(row.doc_id) }, 'Edit'), ' ',
+      h('button', { class: 'btn sm', title: 'Cetak SSTB', onclick: () => this.printRow(row) }, 'Cetak'), ' ',
+      h('button', { class: 'btn sm danger', onclick: () => this.delItem(row) }, 'Hapus')));
+    return tr;
   }
   async load() {
     const r = await (await fetch(`/api/lines/${this.arah}?` + this.params({ page: this.page, size: this.size }))).json();
@@ -475,24 +756,13 @@ class DocPage {
     this.chips.append(h('span', { class: 'chip' }, h('b', {}, r.docs.toLocaleString('id-ID')), ' SSTB'),
       h('span', { class: 'chip' }, h('b', {}, r.total.toLocaleString('id-ID')), ' baris'),
       h('span', { class: 'chip big' }, 'Total jumlah ', h('b', {}, r.sum.toLocaleString('id-ID'))));
-    this.tbody.innerHTML = '';
-    if (!r.rows.length) this.tbody.append(h('tr', { class: 'none' }, h('td', { class: 'empty', colspan: this.cols.length + 1 },
-      (this.qstate.q || this.catstate.jenis) ? 'Tidak ada data yang cocok dengan filter.' : 'Belum ada data pada rentang tanggal ini. Klik "+ Tambah ' + this.label + '".')));
-    for (const row of r.rows) {
-      const tr = h('tr');
-      for (const [n, l, k] of this.cols) {
-        const v = row[n];
-        tr.append(h('td', { class: k === 'int' ? 'num' : '', 'data-label': l }, k === 'int' ? fmtNum(v) : k === 'date' ? fmtDate(v) : v == null ? '' : v));
-      }
-      tr.append(h('td', { class: 'act', 'data-label': 'Aksi' },
-        h('button', { class: 'btn sm', title: 'Edit seluruh SSTB ini', onclick: () => this.openForm(row.doc_id) }, 'Edit'), ' ',
-        h('button', { class: 'btn sm', title: 'Cetak SSTB', onclick: () => this.printRow(row) }, 'Cetak'), ' ',
-        h('button', { class: 'btn sm danger', onclick: () => this.delItem(row) }, 'Hapus')));
-      this.tbody.append(tr);
-    }
+    const emptyMsg = filterActiveCount(this.pstate)
+      ? 'Tidak ada data yang cocok dengan filter.'
+      : 'Belum ada data pada rentang tanggal ini. Klik "+ Tambah ' + this.label + '".';
+    renderGroupedTable(this.table, r.rows, this.pstate.group, this.cols.length + 1, row => this.rowEl(row), emptyMsg);
+    this.tbody = this.table.querySelector('tbody');
     pagerInto(this.pager, this.page, r.pages, r.total, '', p => { this.page = p; this.load(); },
       this.size, n => { this.size = n; this.page = 1; this.load(); });
-    this.applyVis();
   }
   async printRow(row) {
     const d = await (await fetch(`/api/doc/${this.arah}/${row.doc_id}`)).json();

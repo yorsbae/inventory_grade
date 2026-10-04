@@ -20,13 +20,26 @@
 const $f=document.getElementById('f'),$t=document.getElementById('t'),$b=document.getElementById('by');
 $t.value=todayISO();$f.value=defaultFrom();
 const range={from:$f.value,to:$t.value};
-const crud=new Crud(document.getElementById('listView'),'produksi',{hideAdd:true,noRange:true,range,onChange:()=>run()});
+const crud=new Crud(document.getElementById('listView'),'produksi',{hideAdd:true,noRange:true,range,onChange:()=>run(),
+ filterPanel:{
+  title:'Produksi',
+  searchPlaceholder:'Cari Nama, Pasangan, Kode Motif, Motif, Jenis, Ket, Catatan…',
+  fields:[{n:'nama',l:'Nama'},{n:'pasangan',l:'Pasangan'},{n:'kode_motif',l:'Kode Motif'},
+   {n:'motif',l:'Motif'},{n:'jenis',l:'Jenis'},{n:'ket',l:'Keterangan'}],
+  rangeField:{n:'jumlah',l:'Jumlah'},
+  sortFields:[{n:'tgl_produksi',l:'Tanggal Produksi'},{n:'tgl_masuk_sanggan',l:'Tanggal Masuk Sanggan'},
+   {n:'nama',l:'Nama'},{n:'pasangan',l:'Pasangan'},{n:'kode_motif',l:'Kode Motif'},{n:'motif',l:'Motif'},
+   {n:'jenis',l:'Jenis'},{n:'jumlah',l:'Jumlah'},{n:'ket',l:'Keterangan'}],
+  groupFields:[{n:'tgl_produksi',l:'Tanggal Produksi'},{n:'nama',l:'Nama'},{n:'pasangan',l:'Pasangan'},
+   {n:'motif',l:'Motif'},{n:'jenis',l:'Jenis'},{n:'ket',l:'Keterangan'}],
+  fetchDistinct:async col=>await(await fetch(`/api/distinct/produksi?col=${col}&`+crud.params())).json()
+ }});
 async function run(){
  const q=new URLSearchParams({from:$f.value,to:$t.value,by:$b.value});
  document.getElementById('xl').href='/export/rekap?'+q;
  const r=await (await fetch('/api/rekap?'+q)).json();const tb=document.getElementById('tb');tb.innerHTML='';
  const heads=[r.label,'Baris'].concat(r.cats.map(c=>c[0].toUpperCase()+c.slice(1)),['Jumlah']);
- tb.append(h('thead',{},h('tr',{},heads.map(x=>h('th',{},x)))));
+ tb.append(h('thead',{},h('tr',{},heads.map((x,i)=>h('th',{class:i>0?'num':''},x)))));
  const body=h('tbody');
  if(!r.rows.length)body.append(h('tr',{},h('td',{colspan:heads.length,class:'empty'},'Belum ada produksi pada rentang ini. Klik "+ Tambah Produksi".')));
  for(const x of r.rows){body.append(h('tr',{class:x.total?'total':''},

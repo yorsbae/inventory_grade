@@ -234,72 +234,11 @@ function applyColVis(theadRow, tbody, cols, vis) {
   });
 }
 
-/* filter kolom ala Excel: tombol kecil di judul kolom membuka daftar nilai unik yang bisa dicentang */
-let CURRENT_COLFILT = null;
-function closeAnyColumnFilter() { if (CURRENT_COLFILT) CURRENT_COLFILT(); }
-async function openColumnFilter(anchor, o) {
-  // o: {label, selected: string[] (kosong = tidak difilter), fetchList: async()=>string[], onApply: (vals)=>void}
-  closeAnyColumnFilter();
-  const search = h('input', { type: 'search', placeholder: 'Cari nilai…' });
-  const list = h('div', { class: 'cf-list' }, h('div', { class: 'cf-empty' }, 'Memuat…'));
-  const countLbl = h('small', { class: 'cf-count' }, '');
-  let all = [], checked = new Set();
-  function renderList(filterText) {
-    list.innerHTML = '';
-    const ft = (filterText || '').trim().toLowerCase();
-    const shown = ft ? all.filter(v => String(v).toLowerCase().includes(ft)) : all;
-    if (!shown.length) { list.append(h('div', { class: 'cf-empty' }, 'Tidak ada nilai.')); return; }
-    for (const v of shown) {
-      const cb = h('input', { type: 'checkbox', checked: checked.has(v) });
-      cb.addEventListener('change', () => {
-        if (cb.checked) checked.add(v); else checked.delete(v);
-        countLbl.textContent = `${checked.size}/${all.length} dipilih`;
-      });
-      list.append(h('label', { class: 'cf-item' }, cb, h('span', {}, v === '' ? '(kosong)' : v)));
-    }
-  }
-  const visible = () => { const ft = search.value.trim().toLowerCase(); return ft ? all.filter(v => String(v).toLowerCase().includes(ft)) : all; };
-  search.addEventListener('input', () => renderList(search.value));
-  const selAll = h('button', { type: 'button', class: 'linklike', onclick: () => { visible().forEach(v => checked.add(v)); renderList(search.value); countLbl.textContent = `${checked.size}/${all.length} dipilih`; } }, 'Pilih Semua');
-  const selNone = h('button', { type: 'button', class: 'linklike', onclick: () => { visible().forEach(v => checked.delete(v)); renderList(search.value); countLbl.textContent = `${checked.size}/${all.length} dipilih`; } }, 'Kosongkan');
-  const box = h('div', { class: 'colfiltpop' },
-    h('div', { class: 'cf-title' }, 'Filter ', h('b', {}, o.label)),
-    h('div', { class: 'cf-search' }, search),
-    h('div', { class: 'cf-actions' }, selAll, selNone, h('span', { class: 'grow' }), countLbl),
-    list,
-    h('div', { class: 'cf-foot' },
-      h('button', { class: 'btn sm', onclick: () => { close(); o.onApply([]); } }, 'Hapus Filter'),
-      h('span', { class: 'grow' }),
-      h('button', { class: 'btn sm', onclick: () => close() }, 'Batal'),
-      h('button', { class: 'btn sm primary', onclick: () => {
-        const result = (checked.size === all.length) ? [] : [...checked];  // semua tercentang = sama dengan tidak difilter
-        close(); o.onApply(result);
-      } }, 'Terapkan')));
-  document.body.append(box);
-  const r = anchor.getBoundingClientRect(), m = 8, w = 250;
-  const vw = document.documentElement.clientWidth, vh = window.innerHeight;
-  box.style.left = Math.max(m, Math.min(r.left, vw - m - w)) + 'px';
-  box.style.top = Math.min(r.bottom + 4, vh - m - 80) + 'px';
-  function close() { box.remove(); document.removeEventListener('mousedown', onDoc); CURRENT_COLFILT = null; }
-  function onDoc(e) { if (!box.contains(e.target) && e.target !== anchor && !anchor.contains(e.target)) close(); }
-  setTimeout(() => document.addEventListener('mousedown', onDoc), 0);
-  CURRENT_COLFILT = close;
-  all = await o.fetchList();
-  checked = new Set(o.selected && o.selected.length ? o.selected.filter(v => all.includes(v)) : all);
-  countLbl.textContent = `${checked.size}/${all.length} dipilih`;
-  renderList('');
-}
-/* judul kolom tabel: teks (klik = urutkan asc/desc) + tombol kecil ▾ (klik = buka filter ala Excel) */
+/* judul kolom tabel: teks, klik = urutkan asc/desc (tabel master DB saja; halaman lain pakai panel Filter) */
 function thCell(label, opts) {
-  const { align, active, sortOn, onSort, onFilter } = opts || {};
+  const { align, sortOn, onSort } = opts || {};
   const lab = h('span', { class: 'th-label', onclick: onSort }, label, sortOn ? h('i', { class: 'th-sort' }, sortOn === 'asc' ? ' \u25B2' : ' \u25BC') : null);
-  const kids = [lab];
-  if (onFilter) {
-    const btn = h('button', { type: 'button', class: 'th-filt' + (active ? ' active' : ''), title: 'Filter kolom ' + label,
-      onclick: e => { e.stopPropagation(); onFilter(btn); } }, '▾');
-    kids.push(btn);
-  }
-  return h('th', { class: align || '' }, h('span', { class: 'th-wrap' }, kids));
+  return h('th', { class: align || '' }, h('span', { class: 'th-wrap' }, lab));
 }
 /* cetak SSTB dengan tata letak seperti formulir kertas Surat Serah Terima Barang */
 function printSSTB(doc, label) {
@@ -310,25 +249,30 @@ function printSSTB(doc, label) {
   const total = items.reduce((s, it) => s + (parseInt(it.jumlah) || 0), 0);
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>SSTB ${esc(doc.sstb)}</title>
 <style>
-@page{size:A5;margin:10mm}
+/* Kertas A4 potret, tapi isi cetakan hanya mengisi separuh atas halaman */
+@page{size:A4 portrait;margin:0}
 *{box-sizing:border-box;font-family:Arial,Helvetica,sans-serif}
-body{margin:16px;color:#111;max-width:480px}
-h1{font-size:14px;text-align:center;margin:0 0 2px;text-transform:uppercase;letter-spacing:.5px}
-h2{font-size:11px;text-align:center;margin:0 0 10px;font-weight:normal;color:#444}
-.hdr{display:flex;justify-content:space-between;gap:10px;margin-bottom:10px;font-size:10.5px;border:1px solid #333;padding:7px 10px}
+html,body{margin:0;color:#111;background:#ccc}
+.sheet{width:210mm;min-height:148.5mm;margin:0 auto;padding:14mm 16mm;background:#fff}
+/* catatan: tinggi dibiarkan menyesuaikan kalau barang sangat banyak, supaya data tidak pernah terpotong */
+h1{font-size:15px;text-align:center;margin:0 0 2px;text-transform:uppercase;letter-spacing:.5px}
+h2{font-size:11.5px;text-align:center;margin:0 0 10px;font-weight:normal;color:#444}
+.hdr{display:flex;justify-content:space-between;gap:10px;margin-bottom:10px;font-size:11px;border:1px solid #333;padding:7px 10px}
 .hdr div{line-height:1.6;min-width:0}
 .hdr b{display:inline-block;min-width:60px}
-table{width:100%;table-layout:fixed;border-collapse:collapse;font-size:10.5px;margin-bottom:6px}
+table{width:100%;table-layout:fixed;border-collapse:collapse;font-size:11px;margin-bottom:6px}
 th,td{border:1px solid #333;padding:4px 6px;vertical-align:top;overflow-wrap:break-word;word-break:break-word}
 th{background:#eee;text-align:left}
 td.num,th.num{text-align:right}
 tfoot td{font-weight:bold;background:#f7f7f7}
-.sig{display:flex;justify-content:space-between;margin-top:36px;font-size:10.5px}
+.sig{display:flex;justify-content:space-between;margin-top:22px;font-size:11px}
 .sig div{width:45%;text-align:center}
-.sig .line{margin-top:32px;border-top:1px solid #333;padding-top:4px}
-.foot{margin-top:8px;font-size:9px;color:#777;text-align:right}
-@media print{body{margin:0;max-width:none}}
+.sig .line{margin-top:28px;border-top:1px solid #333;padding-top:4px}
+.foot{margin-top:6px;font-size:9px;color:#777;text-align:right}
+@media print{html,body{background:#fff}.sheet{margin:0;box-shadow:none}}
+@media screen{body{padding:10mm 0}.sheet{box-shadow:0 2px 10px rgba(0,0,0,.25)}}
 </style></head><body>
+<div class="sheet">
 <h1>Surat Serah Terima Barang</h1>
 <h2>${esc(label)}</h2>
 <div class="hdr">
@@ -344,6 +288,7 @@ tfoot td{font-weight:bold;background:#f7f7f7}
   <div>Yang Menerima<div class="line">&nbsp;</div></div>
 </div>
 <div class="foot">Dicetak ${fmtDate(todayISO())} dari Stok Grade</div>
+</div>
 <script>window.onload=()=>setTimeout(()=>window.print(),250)</script>
 </body></html>`;
   const win = window.open('', '_blank');
@@ -543,16 +488,7 @@ class Crud {
     this.theadRow.innerHTML = '';
     for (const c of this.meta.cols) this.theadRow.append(thCell(c.l, {
       align: this.isInt(c) ? 'num' : '', sortOn: this.sort === c.n ? this.dir : null,
-      onSort: () => { this.dir = (this.sort === c.n && this.dir === 'desc') ? 'asc' : 'desc'; this.sort = c.n; this.load(); },
-      active: !!(this.filters[c.n] && this.filters[c.n].length),
-      onFilter: btn => openColumnFilter(btn, {
-        label: c.l, selected: this.filters[c.n] || [],
-        fetchList: async () => await (await fetch(`/api/distinct/${this.key}?col=${c.n}&` + this.params())).json(),
-        onApply: vals => {
-          if (vals.length) this.filters[c.n] = vals; else delete this.filters[c.n];
-          this.page = 1; this.load();
-        }
-      })
+      onSort: () => { this.dir = (this.sort === c.n && this.dir === 'desc') ? 'asc' : 'desc'; this.sort = c.n; this.load(); }
     }));
     this.theadRow.append(h('th', {}, 'Aksi'));
   }

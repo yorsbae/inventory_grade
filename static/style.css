@@ -49,23 +49,6 @@ thead th.nosort{cursor:default}
 .th-wrap{display:inline-flex;align-items:center;gap:2px;vertical-align:middle}
 .th-label{cursor:pointer;padding:2px 0}
 .th-sort{font-style:normal;font-size:10px}
-.th-filt{border:0;background:rgba(255,255,255,.18);color:#fff;border-radius:4px;width:18px;height:18px;line-height:1;
- font-size:10px;cursor:pointer;flex:0 0 auto;padding:0}
-.th-filt:hover{background:rgba(255,255,255,.35)}
-.th-filt.active{background:#fbbf24;color:#1f2937}
-.colfiltpop{position:fixed;z-index:90;background:#fff;border:1px solid #b8c1d1;border-radius:10px;
- box-shadow:0 10px 28px rgba(15,23,42,.22);width:250px;padding:10px;font-size:12px;color:#1f2937}
-.cf-title{font-weight:600;margin-bottom:6px}
-.cf-search input{width:100%}
-.cf-actions{display:flex;align-items:center;gap:10px;margin:6px 0;font-size:11px;color:#6b7280}
-.linklike{background:none;border:0;color:#2563eb;cursor:pointer;font:inherit;font-size:11px;padding:0;text-decoration:underline}
-.cf-count{white-space:nowrap}
-.cf-list{max-height:220px;overflow:auto;border-top:1px solid #e5e9f2;border-bottom:1px solid #e5e9f2}
-.cf-item{display:flex;align-items:center;gap:7px;padding:5px 2px;cursor:pointer;white-space:normal}
-.cf-item input{width:auto}
-.cf-item span{overflow-wrap:anywhere}
-.cf-empty{padding:10px 2px;color:#6b7280}
-.cf-foot{display:flex;align-items:center;gap:6px;margin-top:8px}
 tbody tr:nth-child(even){background:#f8fafd}tbody tr:hover{background:#eaf1fd}
 td.num{text-align:right;font-variant-numeric:tabular-nums}td.c{text-align:center}
 th.num{text-align:right}th.c{text-align:center}

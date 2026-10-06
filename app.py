@@ -25,6 +25,8 @@ app = Flask(__name__, template_folder=os.path.join(RES, "templates"),
 # --------------------------------------------------------------------------
 CATS = ["wadimor", "junior", "celup", "biasa", "perbaikan", "neci",
         "rusak", "jahit", "melipat", "cabut", "washing"]
+DEFAULT_CATS = list(CATS)
+LABELS = {c: c.capitalize() for c in CATS}   # slug kolom DB -> judul tampilan (dikelola di DB > Kolom Produksi)
 JUMLAH_EXPR = "(" + "+".join(f"t.{c}" for c in CATS) + ")"
 
 def C(n, l, t="text", **k):
@@ -41,7 +43,7 @@ USAGE = {
     "ket": [("dokumen_item", "ket_id")], "dept": [("dokumen", "dept_id")],
     "ketprod": [("produksi", "ket_id")], "pengrajin": [("dokumen", "pengrajin_id")],
     "karyawan": [("produksi", "nama_id"), ("produksi", "pasangan_id")],
-    "motif": [("produksi", "kode_motif_id"), ("dokumen_item", "motif_id"), ("opening", "kode_motif_id")],
+    "motif": [("produksi", "kode_motif_id"), ("dokumen_item", "motif_id"), ("opening", "kode_motif_id"), ("opening_prod", "kode_motif_id")],
 }
 
 SPECS = {
@@ -68,6 +70,17 @@ SPECS = {
                           C("jenis", "Jenis", "auto", sql="rj.nama", hc="FF0000"),
                           C("jumlah", "Jumlah", "int", req=1),
                           C("tanggal_mulai", "Berlaku Mulai Tanggal", "date")]),
+    "kolom_prod": dict(table="ref_kolom_prod", title="Kolom Produksi", color="4472C4",
+                    cols=[C("nama", "Judul Kolom", req=1, uniq=1),
+                          C("kode", "Nama Kolom di DB", ro=1)]),
+    "opening_prod": dict(table="opening_prod", title="Stok Awal Produksi", color="4472C4",
+                    joins=["LEFT JOIN ref_jenis rj ON rj.id=r_kode_motif.jenis_id"],
+                    cols=[C("kode_motif", "Kode Motif", "ref", src="motif", req=1, uniq=1),
+                          C("motif", "Motif", "auto", sql="r_kode_motif.nama_motif", hc="FF0000"),
+                          C("jenis", "Jenis", "auto", sql="rj.nama", hc="FF0000")]
+                         + [C(c, LABELS[c], "int", cat=1) for c in CATS]
+                         + [C("jumlah", "Jumlah", "auto", sql=JUMLAH_EXPR, num=1, hc="FF0000"),
+                            C("tanggal_mulai", "Berlaku Mulai Tanggal", "date")]),
     "produksi": dict(table="produksi", title="Produksi", color="4472C4", datecol="tgl_produksi",
                      joins=["LEFT JOIN ref_jenis rj ON rj.id=r_kode_motif.jenis_id"],
                      cols=[C("tgl_produksi", "Tanggal Produksi", "date", req=1),
@@ -78,13 +91,50 @@ SPECS = {
                            C("motif", "Motif", "auto", sql="r_kode_motif.nama_motif", hc="FF0000"),
                            C("jenis", "Jenis", "auto", sql="rj.nama", hc="FF0000"),
                            C("link_masuk", "Link Barang Masuk", "linkref", src="masuklink",
+                             filtersql="""(SELECT d.sstb FROM dokumen_item i JOIN dokumen d ON d.id=i.dokumen_id
+                                 WHERE i.id=t.link_masuk_id)""",
                              labelsql="""(SELECT d.sstb||' • '||mo.kode_motif||' ('||i.jumlah||') #'||i.id
                                  FROM dokumen_item i JOIN dokumen d ON d.id=i.dokumen_id
                                  JOIN ref_motif mo ON mo.id=i.motif_id WHERE i.id=t.link_masuk_id)""")]
-                          + [C(c, c.capitalize(), "int") for c in CATS]
+                          + [C(c, LABELS[c], "int", cat=1) for c in CATS]
                           + [C("jumlah", "Jumlah", "auto", sql=JUMLAH_EXPR, num=1, hc="FF0000"),
                              C("ket", "Ket", "ref", src="ketprod"), C("catatan", "Catatan")]),
 }
+
+def reload_cats(db):
+    """Muat daftar kolom produksi dari tabel ref_kolom_prod ke CATS/LABELS/JUMLAH_EXPR dan bangun ulang SPECS."""
+    global JUMLAH_EXPR
+    rows = db.execute("SELECT kode, nama FROM ref_kolom_prod ORDER BY id").fetchall()
+    CATS[:] = [r[0] for r in rows]
+    LABELS.clear(); LABELS.update({r[0]: r[1] for r in rows})
+    JUMLAH_EXPR = "(" + ("+".join(f"t.{c}" for c in CATS) or "0") + ")"
+    for key in ("produksi", "opening_prod"):
+        cols = SPECS[key]["cols"]
+        i = next(n for n, c in enumerate(cols) if c.get("cat"))
+        j = next(n for n, c in enumerate(cols) if c["n"] == "jumlah")
+        jm = dict(cols[j], sql=JUMLAH_EXPR)
+        SPECS[key]["cols"] = cols[:i] + [C(c, LABELS[c], "int", cat=1) for c in CATS] + [jm] + cols[j + 1:]
+
+def jumlah_sql(alias):
+    """Ekspresi jumlah semua kolom produksi untuk alias tabel produksi tertentu."""
+    return "(" + ("+".join(f"{alias}.{c}" for c in CATS) or "0") + ")"
+
+def kolom_slug(db, nama):
+    """Nama kolom DB yang aman (diawali k_) dan belum dipakai di tabel produksi / opening_prod."""
+    base = "k_" + (re.sub(r"[^a-z0-9]+", "_", nama.lower()).strip("_") or "kolom")
+    taken = {r[1] for t in ("produksi", "opening_prod") for r in db.execute(f"PRAGMA table_info({t})")}
+    taken |= {r[0] for r in db.execute("SELECT kode FROM ref_kolom_prod")}
+    slug, n = base, 2
+    while slug in taken:
+        slug = f"{base}_{n}"; n += 1
+    return slug
+
+def ensure_cat_columns(db):
+    for tbl in ("produksi", "opening_prod"):
+        have = {r[1] for r in db.execute(f"PRAGMA table_info({tbl})")}
+        for c in CATS:
+            if c not in have:
+                db.execute(f"ALTER TABLE {tbl} ADD COLUMN {c} INTEGER NOT NULL DEFAULT 0")
 
 def dbcol(c):
     return c["n"] + "_id" if c["t"] in ("ref", "linkref") else c["n"]
@@ -128,6 +178,10 @@ def init_db():
         db.execute("DROP INDEX IF EXISTS ux_opening")
         db.execute("ALTER TABLE opening RENAME TO opening_lama")
         opening_migrated = True
+    db.execute("CREATE TABLE IF NOT EXISTS ref_kolom_prod (id INTEGER PRIMARY KEY AUTOINCREMENT, nama TEXT, kode TEXT)")
+    if not db.execute("SELECT 1 FROM ref_kolom_prod").fetchone():
+        db.executemany("INSERT INTO ref_kolom_prod(nama,kode) VALUES (?,?)", [(c.capitalize(), c) for c in DEFAULT_CATS])
+    reload_cats(db)
     for key, s in SPECS.items():
         cols = []
         for c in s["cols"]:
@@ -154,6 +208,7 @@ def init_db():
         ket_id INTEGER NOT NULL REFERENCES ref_ket(id),
         jumlah INTEGER NOT NULL CHECK(jumlah>0),
         link_produksi_id INTEGER)""")
+    ensure_cat_columns(db)  # kolom produksi dinamis (DB > Kolom Produksi)
     ensure_columns(db)  # tambah kolom baru ke tabel lama tanpa menghapus data
     db.execute("CREATE TABLE IF NOT EXISTS settings (k TEXT PRIMARY KEY, v TEXT)")
     db.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_dokumen ON dokumen(arah, sstb)")
@@ -161,6 +216,7 @@ def init_db():
     db.execute("CREATE INDEX IF NOT EXISTS ix_item_dok ON dokumen_item(dokumen_id)")
     db.execute("CREATE INDEX IF NOT EXISTS ix_item_motif ON dokumen_item(motif_id)")
     db.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_opening_motif ON opening(kode_motif_id)")
+    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_opening_prod_motif ON opening_prod(kode_motif_id)")
     db.execute("CREATE INDEX IF NOT EXISTS ix_dokumen_arah_tgl ON dokumen(arah, tanggal)")
     db.execute("CREATE INDEX IF NOT EXISTS ix_prod_tgl ON produksi(tgl_produksi)")
     if old:
@@ -430,7 +486,7 @@ def col_info(key):
         elif c["t"] == "auto":
             out[n] = (f"({c['sql']})", c["t"])
         elif c["t"] == "linkref":
-            out[n] = (f"({c['labelsql']})", c["t"])
+            out[n] = (f"({c.get('filtersql') or c['labelsql']})", c["t"])  # filter/cari pakai SSTB, sesuai yang tampil
         else:
             out[n] = (f"t.{n}", c["t"])
     return out
@@ -482,6 +538,7 @@ JENIS_FILTER = {  # key -> ekspresi SQL id jenis milik baris, untuk filter "kate
     "motif": "t.jenis_id",
     "opening": "(SELECT jenis_id FROM ref_motif WHERE id=t.kode_motif_id)",
     "produksi": "(SELECT jenis_id FROM ref_motif WHERE id=t.kode_motif_id)",
+    "opening_prod": "(SELECT jenis_id FROM ref_motif WHERE id=t.kode_motif_id)",
 }
 
 def list_filters(key, args):
@@ -494,6 +551,11 @@ def list_filters(key, args):
         where.append(f"t.{dc}>=?"); params.append(args.get("from") or default_from())
         if args.get("to"):
             where.append(f"t.{dc}<=?"); params.append(args["to"])
+    if (args.get("id") or "").isdigit():  # buka satu baris (mis. dari hyperlink Link Produksi)
+        where.append("t.id=?"); params.append(int(args["id"]))
+    kat = args.get("kat")
+    if kat and kat in CATS and key in ("opening_prod", "produksi"):  # kategori = kolom produksi (Wadimor, Junior, ...)
+        where.append(f"t.{kat}<>0")
     if args.get("jenis") and key in JENIS_FILTER:
         where.append(f"{JENIS_FILTER[key]}=(SELECT id FROM ref_jenis WHERE nama=?)")
         params.append(args["jenis"])
@@ -548,7 +610,7 @@ def api_distinct(key):
 def api_meta(key):
     s = spec_or_404(key)
     return jsonify(key=key, title=s["title"], datecol=s.get("datecol"), cats=CATS,
-                   cols=[{k: v for k, v in c.items() if k in ("n", "l", "t", "src", "req", "num")} for c in s["cols"]])
+                   cols=[{k: v for k, v in c.items() if k in ("n", "l", "t", "src", "req", "num", "ro", "cat")} for c in s["cols"]])
 
 OPT_LIMIT_DEFAULT, OPT_LIMIT_MAX = 50, 200  # rekomendasi input: tidak pernah kirim semua data sekaligus
 
@@ -576,7 +638,7 @@ def search_produksilink(db, q, limit):
         params += [f"%{q}%"] * 3
     w = ("WHERE " + " AND ".join(where)) if where else ""
     rows = db.execute(f"""SELECT p.id, p.tgl_produksi, pm.kode_motif, pm.nama_motif, kr.nama nama,
-            ({JUMLAH_EXPR.replace('t.', 'p.')}) jumlah
+            ({jumlah_sql('p')}) jumlah
         FROM produksi p LEFT JOIN ref_motif pm ON pm.id=p.kode_motif_id
         LEFT JOIN ref_karyawan kr ON kr.id=p.nama_id
         {w} ORDER BY p.tgl_produksi DESC, p.id DESC LIMIT ?""", params + [limit]).fetchall()
@@ -632,9 +694,9 @@ def api_list(key):
     sel, joins, w, params, order = list_query(key, request.args)
     size, page = page_args(request.args)
     tsum = None
-    if key == "produksi":
+    if key in ("produksi", "opening_prod"):
         total, tsum = db.execute(
-            f"SELECT COUNT(*), COALESCE(SUM({JUMLAH_EXPR}),0) FROM produksi t {joins} {w}", params).fetchone()
+            f"SELECT COUNT(*), COALESCE(SUM({JUMLAH_EXPR}),0) FROM {s['table']} t {joins} {w}", params).fetchone()
     else:
         total = db.execute(f"SELECT COUNT(*) FROM {s['table']} t {joins} {w}", params).fetchone()[0]
     rows = db.execute(f"SELECT {sel} FROM {s['table']} t {joins} {w} ORDER BY {order} LIMIT ? OFFSET ?",
@@ -700,6 +762,11 @@ def save(key, rid=None):
     out, errs = clean_row(db, key, request.get_json(force=True) or {}, rid)
     if errs:
         return jsonify(ok=False, errors=errs), 400
+    if key == "kolom_prod":
+        if rid is None:
+            out["kode"] = kolom_slug(db, out["nama"])
+        else:
+            out.pop("kode", None)  # nama kolom di DB tetap; hanya judul yang berubah
     cols = list(out.keys())
     if rid is None:
         db.execute(f"INSERT INTO {s['table']}({','.join(cols)}) VALUES ({','.join('?'*len(cols))})",
@@ -707,8 +774,14 @@ def save(key, rid=None):
     else:
         db.execute(f"UPDATE {s['table']} SET {','.join(c + '=?' for c in cols)} WHERE id=?",
                    [out[c] for c in cols] + [rid])
+    if key == "kolom_prod":
+        ensure_cat_columns_after(db)
     db.commit()
     return jsonify(ok=True, warnings=[])
+
+def ensure_cat_columns_after(db):
+    reload_cats(db)
+    ensure_cat_columns(db)
 
 @app.post("/api/<key>")
 def api_create(key):
@@ -722,6 +795,27 @@ def api_update(key, rid):
 def api_delete(key, rid):
     s = spec_or_404(key)
     db = get_db()
+    if key == "kolom_prod":
+        r = db.execute("SELECT kode FROM ref_kolom_prod WHERE id=?", (rid,)).fetchone()
+        if not r:
+            return jsonify(ok=True)
+        kode = r[0]
+        if len(CATS) <= 1:
+            return jsonify(ok=False, errors=["Minimal harus ada 1 kolom produksi."]), 409
+        used = sum(db.execute(f"SELECT COUNT(*) FROM {t} WHERE {kode}<>0").fetchone()[0]
+                   for t in ("produksi", "opening_prod"))
+        if used:
+            return jsonify(ok=False, errors=[f"Tidak bisa dihapus: kolom ini masih berisi angka di {used} data produksi/stok awal. "
+                                              "Kosongkan (0) dulu atau ubah judulnya saja."]), 409
+        db.execute("DELETE FROM ref_kolom_prod WHERE id=?", (rid,))
+        for t in ("produksi", "opening_prod"):
+            try:
+                db.execute(f"ALTER TABLE {t} DROP COLUMN {kode}")
+            except sqlite3.OperationalError:
+                pass  # SQLite lama: kolom dibiarkan (tidak tampil & tidak dihitung)
+        reload_cats(db)
+        db.commit()
+        return jsonify(ok=True)
     used = 0
     for tbl, col in USAGE.get(key, []):
         used += db.execute(f"SELECT COUNT(*) FROM {tbl} WHERE {col}=?", (rid,)).fetchone()[0]
@@ -749,9 +843,16 @@ DOC_COLOR = {"masuk": "ED7D31", "keluar": "70AD47"}
 
 LINK_PRODUKSI_LABEL_SQL = """(SELECT pm.kode_motif||' • '||p.tgl_produksi||' #'||p.id
     FROM produksi p LEFT JOIN ref_motif pm ON pm.id=p.kode_motif_id WHERE p.id=i.link_produksi_id)"""
-LINE_SEL = f"""d.sstb AS sstb, d.tanggal AS tanggal, dp.nama AS dept, m.kode_motif AS kode_motif,
+LINK_PRODUKSI_SSTB_SQL = """(SELECT d2.sstb FROM produksi p JOIN dokumen_item i2 ON i2.id=p.link_masuk_id
+    JOIN dokumen d2 ON d2.id=i2.dokumen_id WHERE p.id=i.link_produksi_id)"""
+
+def line_sel():
+    """Kolom SELECT baris barang masuk/keluar. dikerjakan = total produksi yang menaut ke baris Barang Masuk ini."""
+    return f"""d.sstb AS sstb, d.tanggal AS tanggal, dp.nama AS dept, m.kode_motif AS kode_motif,
     m.nama_motif AS motif, j.nama AS jenis, i.jumlah AS jumlah, k.nama AS ket,
     pg.nama AS pengrajin, k.kode AS rumus, {LINK_PRODUKSI_LABEL_SQL} AS link_produksi,
+    {LINK_PRODUKSI_SSTB_SQL} AS link_produksi_sstb,
+    (SELECT COALESCE(SUM({jumlah_sql('p')}),0) FROM produksi p WHERE p.link_masuk_id=i.id) AS dikerjakan,
     i.id AS id, d.id AS doc_id"""
 LINE_FROM = """FROM dokumen_item i JOIN dokumen d ON d.id=i.dokumen_id
     JOIN ref_dept dp ON dp.id=d.dept_id JOIN ref_motif m ON m.id=i.motif_id
@@ -770,7 +871,7 @@ def arah_or_404(name):
 LINE_SEARCH_EXPRS = ["d.sstb", "dp.nama", "m.kode_motif", "m.nama_motif", "j.nama", "k.nama", "pg.nama", "k.kode"]
 LINE_COL_EXPRS = {"sstb": "d.sstb", "tanggal": "d.tanggal", "dept": "dp.nama", "kode_motif": "m.kode_motif",
                    "motif": "m.nama_motif", "jenis": "j.nama", "jumlah": "i.jumlah", "ket": "k.nama",
-                   "pengrajin": "pg.nama", "rumus": "k.kode", "link_produksi": LINK_PRODUKSI_LABEL_SQL}
+                   "pengrajin": "pg.nama", "rumus": "k.kode", "link_produksi": LINK_PRODUKSI_SSTB_SQL}
 
 def lines_filters(arah, args):
     """daftar klausa WHERE, params — dipakai bareng oleh lines_query dan /api/distinct/lines."""
@@ -826,7 +927,7 @@ def api_lines(name):
     size, page = page_args(request.args)
     total, tsum, docs = db.execute(
         f"SELECT COUNT(*), COALESCE(SUM(i.jumlah),0), COUNT(DISTINCT d.id) {LINE_FROM} {w}", params).fetchone()
-    rows = db.execute(f"SELECT {LINE_SEL} {LINE_FROM} {w} ORDER BY {order} LIMIT ? OFFSET ?",
+    rows = db.execute(f"SELECT {line_sel()} {LINE_FROM} {w} ORDER BY {order} LIMIT ? OFFSET ?",
                       params + [size, (page - 1) * size]).fetchall()
     return jsonify(rows=[dict(r) for r in rows], total=total, pages=max(1, -(-total // size)),
                    sum=tsum, docs=docs)
@@ -1090,18 +1191,30 @@ def rekap_data(db, f, t, by):
                           FROM produksi t {joins} WHERE t.tgl_produksi>=? AND t.tgl_produksi<=?
                           GROUP BY grp ORDER BY grp""", (f, t)).fetchall()
     rows = [dict(r) for r in rows]
+    awal = {c: 0 for c in CATS}
+    n_awal = 0
+    for r in db.execute("SELECT * FROM opening_prod"):
+        if not r["tanggal_mulai"] or t >= r["tanggal_mulai"]:
+            n_awal += 1
+            for c in CATS:
+                awal[c] += r[c] or 0
+    awal["jumlah"] = sum(awal[c] for c in CATS)
     if rows:
         tot = {"grp": "TOTAL", "total": True, "baris": sum(r["baris"] for r in rows)}
         for c in CATS + ["jumlah"]:
             tot[c] = sum(r[c] or 0 for r in rows)
         rows.append(tot)
+        if awal["jumlah"]:  # tampilkan stok awal & saldo (stok awal + produksi periode ini)
+            rows.insert(0, dict(awal, grp="STOK AWAL", awal=True, baris=n_awal))
+            rows.append(dict({c: awal[c] + tot[c] for c in CATS + ["jumlah"]}, grp="SALDO (Stok Awal + Produksi)",
+                             total=True, saldo=True, baris=tot["baris"]))
     return label, rows
 
 @app.get("/api/rekap")
 def api_rekap():
     f, t = date_args()
     label, rows = rekap_data(get_db(), f, t, request.args.get("by", "tanggal"))
-    return jsonify(rows=rows, label=label, cats=CATS)
+    return jsonify(rows=rows, label=label, cats=CATS, labels=LABELS)
 
 LINE_BY = {"tanggal": ("d.tanggal", "Tanggal"), "dept": ("dp.nama", "Dept"), "jenis": ("j.nama", "Jenis"),
            "motif": ("m.kode_motif || ' - ' || m.nama_motif", "Motif"), "ket": ("k.nama", "Ket"),
@@ -1189,7 +1302,7 @@ def export_key(key):
 def export_lines(name):
     arah = ARAH[name]
     w, params, order = lines_query(arah, request.args)
-    rows = get_db().execute(f"SELECT {LINE_SEL} {LINE_FROM} {w} ORDER BY {order}", params).fetchall()
+    rows = get_db().execute(f"SELECT {line_sel()} {LINE_FROM} {w} ORDER BY {order}", params).fetchall()
     wb = Workbook(); ws = wb.active; ws.title = DOC_TITLE[name]
     red = {"motif", "jenis", "rumus"}
     hdr(ws, 1, [c[1] for c in LINE_COLS], ["FF0000" if c[0] in red else DOC_COLOR[name] for c in LINE_COLS])
@@ -1263,7 +1376,7 @@ def export_rekap(name=None):
         return send_wb(wb, f"rekap_{name}_{f}_{t}.xlsx")
     label, rows = rekap_data(get_db(), f, t, request.args.get("by", "tanggal"))
     wb = Workbook(); ws = wb.active; ws.title = "Rekap Produksi"
-    labels = [label, "Baris"] + [c.capitalize() for c in CATS] + ["Jumlah"]
+    labels = [label, "Baris"] + [LABELS[c] for c in CATS] + ["Jumlah"]
     hdr(ws, 1, labels, ["4472C4"] * len(labels))
     for r in rows:
         ws.append([r["grp"], r["baris"]] + [r[c] or 0 for c in CATS] + [r["jumlah"] or 0])
@@ -1271,7 +1384,7 @@ def export_rekap(name=None):
             c = ws.cell(row=ws.max_row, column=i); c.border = BORDER
             if i > 1:
                 c.number_format = NUM_FMT
-            if r.get("total"):
+            if r.get("total") or r.get("awal"):
                 c.font = Font(bold=True); c.fill = PatternFill("solid", fgColor="D9E1F2")
     widths(ws, [30, 8] + [11] * len(CATS) + [12])
     ws.freeze_panes = "B2"
@@ -1343,9 +1456,13 @@ def import_xlsx(key):
         out, errs = clean_row(db, key, row)
         if errs:
             errors.append({"row": rn, "msg": "; ".join(errs)}); continue
+        if key == "kolom_prod":
+            out["kode"] = kolom_slug(db, out["nama"])
         cn = list(out.keys())
         db.execute(f"INSERT INTO {s['table']}({','.join(cn)}) VALUES ({','.join('?'*len(cn))})", [out[c] for c in cn])
         ok += 1
+    if key == "kolom_prod":
+        ensure_cat_columns_after(db)
     db.commit()
     return jsonify(ok=True, inserted=ok, unit="baris", errors=errors[:200], error_count=len(errors))
 
@@ -1417,15 +1534,26 @@ def home():
 
 @app.get("/db")
 def page_db():
-    tabs = [(k, SPECS[k]["title"]) for k in ("motif", "jenis", "opening", "ket", "dept", "ketprod", "pengrajin", "karyawan")]
+    tabs = [(k, SPECS[k]["title"]) for k in ("motif", "jenis", "opening", "kolom_prod", "opening_prod", "ket", "dept", "ketprod", "pengrajin", "karyawan")]
     return render_template("db.html", tabs=tabs, title="DB (Master Data)")
 
 @app.get("/<key>")
 def page_main(key):
+    db = get_db()
     if key == "produksi":
-        return render_template("produksi.html", title="Produksi")
+        init = {}
+        pid = request.args.get("pid", "")
+        r = db.execute("SELECT tgl_produksi FROM produksi WHERE id=?", (int(pid),)).fetchone() if pid.isdigit() else None
+        if r and r[0]:  # dibuka dari hyperlink Link Produksi: tampilkan satu input saja
+            init = dict(pid=int(pid), tanggal=r[0])
+        return render_template("produksi.html", title="Produksi", init=init)
     if key in ARAH:
-        return render_template("doc.html", arah=key, title=DOC_TITLE[key])
+        init = {}
+        sstb = (request.args.get("sstb") or "").strip()
+        r = db.execute("SELECT MIN(tanggal) FROM dokumen WHERE arah=? AND sstb=?", (ARAH[key], sstb)).fetchone() if sstb else None
+        if r and r[0]:  # dibuka dari hyperlink SSTB: filter ke SSTB itu dan sesuaikan rentang tanggal
+            init = dict(sstb=sstb, tanggal=r[0])
+        return render_template("doc.html", arah=key, title=DOC_TITLE[key], init=init)
     if key == "stok":
         return render_template("stok.html", title="Laporan Posisi Stok")
     if key == "rekap":

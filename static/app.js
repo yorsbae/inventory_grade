@@ -210,6 +210,13 @@ function categoryFilter(state, onChange, src, key, labelAll) {
   });
   return h('label', { class: 'catfilter' }, 'Kategori', sel);
 }
+/* Kategori produksi = kolom produksi (Wadimor, Junior, ...): tampilkan hanya baris yang kolom itu terisi */
+function katProdFilter(state, cols, onChange) {
+  const sel = h('select', {}, h('option', { value: '' }, 'Semua Kategori'));
+  for (const c of cols) sel.append(h('option', { value: c.n }, c.l));
+  sel.addEventListener('change', () => { state.kat = sel.value; onChange(); });
+  return h('label', { class: 'catfilter' }, 'Kategori', sel);
+}
 /* daftar tabel tercentang: pilih kolom mana yang ditampilkan, disimpan per halaman */
 function colChecklist(storeKey, cols, onChange) {
   let vis;
@@ -465,7 +472,8 @@ class Crud {
       this.chipsRow = fi.chipsRow;
     } else {
       tb.append(searchBox(this.qstate, () => { this.page = 1; this.load(); }));
-      if (JENIS_FILTER_KEYS.includes(this.key)) tb.append(categoryFilter(this.catstate, () => { this.page = 1; this.load(); }));
+      if (this.key === 'opening_prod') tb.append(katProdFilter(this.catstate, m.cols.filter(c => c.cat), () => { this.page = 1; this.load(); }));
+      else if (JENIS_FILTER_KEYS.includes(this.key)) tb.append(categoryFilter(this.catstate, () => { this.page = 1; this.load(); }));
       tb.append(h('span', { class: 'grow' }));
       const io = ioTools(this.key, () => { this.load(); if (this.o.onChange) this.o.onChange(); }, this.notify, this.impBox);
       this.exp = io.exp; tb.append(...io.els);
@@ -506,6 +514,7 @@ class Crud {
     } else {
       if (this.qstate.q) p.set('q', this.qstate.q);
       if (this.catstate.jenis) p.set('jenis', this.catstate.jenis);
+      if (this.catstate.kat) p.set('kat', this.catstate.kat);
       if (Object.keys(this.filters).length) p.set('filters', JSON.stringify(this.filters));
       if (this.sort) { p.set('sort', this.sort); p.set('dir', this.dir); }
     }
@@ -516,8 +525,12 @@ class Crud {
     const tr = h('tr');
     for (const c of this.meta.cols) {
       const v = row[c.n];
-      tr.append(h('td', { class: this.isInt(c) ? 'num' : '', 'data-label': c.l },
-        this.isInt(c) ? fmtNum(v) : c.t === 'date' ? fmtDate(v) : v == null ? '' : v));
+      let cell = this.isInt(c) ? fmtNum(v) : c.t === 'date' ? fmtDate(v) : v == null ? '' : v;
+      if (c.t === 'linkref' && v) {  // Link Barang Masuk: tampilkan SSTB saja, klik = buka Barang Masuk SSTB itu
+        const sstb = String(v).split(' • ')[0];
+        cell = h('a', { class: 'lnk', href: '/masuk?sstb=' + encodeURIComponent(sstb), title: 'Buka Barang Masuk ' + sstb }, sstb);
+      }
+      tr.append(h('td', { class: this.isInt(c) ? 'num' : '', 'data-label': c.l }, cell));
     }
     tr.append(h('td', { class: 'act', 'data-label': 'Aksi' },
       h('button', { class: 'btn sm', onclick: () => this.openForm(row) }, 'Edit'), ' ',
@@ -529,7 +542,7 @@ class Crud {
     const r = await (await fetch('/api/' + this.key + '?' + this.params({ page: this.page, size: this.size }))).json();
     this.exp.href = '/export/' + this.key + '?' + this.params();
     const filterActive = this.pstate ? filterActiveCount(this.pstate) > 0
-      : (this.qstate.q || this.catstate.jenis || Object.keys(this.filters).length);
+      : (this.qstate.q || this.catstate.jenis || this.catstate.kat || Object.keys(this.filters).length);
     const emptyMsg = filterActive ? 'Tidak ada data yang cocok dengan filter.' : 'Belum ada data.';
     renderGroupedTable(this.table, r.rows, this.pstate ? this.pstate.group : null, this.meta.cols.length + 1,
       row => this.rowEl(row), emptyMsg);
@@ -539,7 +552,7 @@ class Crud {
     this.applyVis();
   }
   recalcSum() {
-    if (this.f.jumlah && this.key === 'produksi')
+    if (this.f.jumlah && (this.key === 'produksi' || this.key === 'opening_prod'))
       this.f.jumlah.value = this.meta.cats.reduce((s, c) => s + (parseInt(this.f[c].value) || 0), 0);
   }
   onPickField(c, o) {
@@ -562,11 +575,11 @@ class Crud {
       } else {
         ctl = h('input', {
           type: c.t === 'date' ? 'date' : c.t === 'int' ? 'number' : 'text', min: c.t === 'int' ? 0 : null,
-          inputmode: c.t === 'int' ? 'numeric' : null, readonly: c.t === 'auto', class: c.t === 'auto' ? 'auto' : '',
+          inputmode: c.t === 'int' ? 'numeric' : null, readonly: c.t === 'auto' || c.ro, class: (c.t === 'auto' || c.ro) ? 'auto' : '',
           autocomplete: 'off', tabindex: c.t === 'auto' ? -1 : null
         });
         if (c.t !== 'auto') ctl.addEventListener('keydown', onEnter);
-        if (this.key === 'produksi' && m.cats.includes(c.n)) ctl.addEventListener('input', () => this.recalcSum());
+        if ((this.key === 'produksi' || this.key === 'opening_prod') && m.cats.includes(c.n)) ctl.addEventListener('input', () => this.recalcSum());
         el = ctl;
       }
       this.f[c.n] = ctl;
@@ -614,13 +627,18 @@ const DOC_COLS_BASE = [['sstb', 'SSTB'], ['tanggal', 'Tanggal', 'date'], ['dept'
   ['motif', 'Motif'], ['jenis', 'Jenis'], ['jumlah', 'Jumlah', 'int'], ['ket', 'Ket'], ['pengrajin', 'Nama Pengrajin'], ['rumus', 'Rumus']];
 
 class DocPage {
-  constructor(root, arah) {
+  constructor(root, arah, init) {
+    init = init || {};
     this.root = root; this.arah = arah; this.keluar = arah === 'keluar';
     this.label = arah === 'masuk' ? 'Barang Masuk' : 'Barang Keluar';
-    this.cols = DOC_COLS_BASE.concat(this.keluar ? [['link_produksi', 'Link Produksi']] : []);
+    this.cols = DOC_COLS_BASE.concat(this.keluar ? [['link_produksi', 'Link Produksi', 'link']] : [['ket_produksi', 'Keterangan Produksi', 'prod']]);
     this.page = 1; this.size = PAGE_SIZES[0]; this.sticky = {};
     this.range = { from: defaultFrom(), to: todayISO() };
     this.pstate = newFilterState();
+    if (init.sstb) {  // dibuka dari hyperlink SSTB: filter ke SSTB itu, rentang tanggal menyesuaikan
+      this.range = { from: init.tanggal, to: init.tanggal > todayISO() ? init.tanggal : todayISO() };
+      this.pstate.filters = { sstb: [init.sstb] };
+    }
     /* field panel Filter, disesuaikan dengan kolom yang benar-benar ada di Barang Masuk/Keluar */
     this.filterCfg = {
       title: this.label,
@@ -632,7 +650,7 @@ class DocPage {
         { n: 'rumus', l: 'Rumus' }, { n: 'ket', l: 'Keterangan' }
       ].concat(this.keluar ? [{ n: 'link_produksi', l: 'Link Produksi' }] : []),
       rangeField: { n: 'jumlah', l: 'Jumlah' },
-      sortFields: this.cols.map(([n, l]) => ({ n, l })),
+      sortFields: this.cols.filter(c => c[2] !== 'prod').map(([n, l]) => ({ n, l })),
       groupFields: [['sstb', 'SSTB'], ['tanggal', 'Tanggal'], ['dept', 'Dept'], ['kode_motif', 'Kode Motif'],
         ['motif', 'Motif'], ['jenis', 'Jenis'], ['pengrajin', 'Nama Pengrajin'], ['rumus', 'Rumus'], ['ket', 'Keterangan']]
         .map(([n, l]) => ({ n, l })),
@@ -677,13 +695,29 @@ class DocPage {
     const tr = h('tr');
     for (const [n, l, k] of this.cols) {
       const v = row[n];
-      tr.append(h('td', { class: k === 'int' ? 'num' : '', 'data-label': l }, k === 'int' ? fmtNum(v) : k === 'date' ? fmtDate(v) : v == null ? '' : v));
+      let cell = k === 'int' ? fmtNum(v) : k === 'date' ? fmtDate(v) : v == null ? '' : v;
+      if (k === 'link') cell = this.linkEl(row);
+      else if (k === 'prod') cell = this.prodNote(row);
+      tr.append(h('td', { class: k === 'int' ? 'num' : '', 'data-label': l }, cell));
     }
     tr.append(h('td', { class: 'act', 'data-label': 'Aksi' },
       h('button', { class: 'btn sm', title: 'Edit seluruh SSTB ini', onclick: () => this.openForm(row.doc_id) }, 'Edit'), ' ',
       h('button', { class: 'btn sm', title: 'Cetak SSTB', onclick: () => this.printRow(row) }, 'Cetak'), ' ',
       h('button', { class: 'btn sm danger', onclick: () => this.delItem(row) }, 'Hapus')));
     return tr;
+  }
+  linkEl(row) {  // Link Produksi: tampilkan SSTB barang masuk asalnya, klik = buka input produksinya
+    const lk = row.link_produksi; if (!lk) return '';
+    const id = (lk.match(/#(\d+)\s*$/) || [])[1];
+    return h('a', { class: 'lnk', href: '/produksi?pid=' + id, title: 'Buka input produksi ini' },
+      row.link_produksi_sstb || lk.replace(/\s*#\d+$/, ''));
+  }
+  prodNote(row) {  // Barang Masuk: sudah dikerjakan berapa, sisa berapa (dari Produksi yang menaut ke baris ini)
+    const d = row.dikerjakan || 0; if (!d) return '';
+    const sisa = row.jumlah - d, id = n => n.toLocaleString('id-ID');
+    if (sisa > 0) return h('span', { class: 'pnote part' }, `Dikerjakan ${id(d)} · Sisa ${id(sisa)}`);
+    if (sisa === 0) return h('span', { class: 'pnote done' }, `Dikerjakan ${id(d)} · Selesai`);
+    return h('span', { class: 'pnote over' }, `Dikerjakan ${id(d)} · Lebih ${id(-sisa)}`);
   }
   async load() {
     const r = await (await fetch(`/api/lines/${this.arah}?` + this.params({ page: this.page, size: this.size }))).json();

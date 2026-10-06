@@ -89,8 +89,8 @@ td.empty{text-align:center;color:#6b7280;padding:28px;white-space:normal}
 .modal-f{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;padding:12px 20px;border-top:1px solid #e5e9f2;background:#fafbfe;border-radius:0 0 14px 14px}
 /* baris barang */
 .irow>*{min-width:0}
-.irow{display:grid;grid-template-columns:170px minmax(140px,1.4fr) minmax(170px,1.2fr) 80px 110px 36px;gap:8px;align-items:start;padding:8px 0;border-bottom:1px dashed #e0e5ef}
-.irow.has-link{grid-template-columns:160px minmax(130px,1.1fr) minmax(140px,.9fr) 70px 90px minmax(170px,1.2fr) 36px}
+.irow{display:grid;grid-template-columns:170px minmax(140px,1.4fr) minmax(170px,1.2fr) 80px 110px 84px 36px;gap:8px;align-items:start;padding:8px 0;border-bottom:1px dashed #e0e5ef}
+.irow.has-link{grid-template-columns:160px minmax(130px,1.1fr) minmax(140px,.9fr) 70px 90px 84px minmax(170px,1.2fr) 36px}
 .ihead{font-size:12px;color:#6b7280;font-weight:600;padding-bottom:4px}
 .cell small{display:none;color:#6b7280;font-size:11px;margin-bottom:2px}
 .info{font-size:13px;padding-top:9px;min-height:20px}.stock{font-size:12px;color:#166534}.stock.low{color:#b91c1c;font-weight:600}
@@ -119,3 +119,10 @@ td.empty{text-align:center;color:#6b7280;padding:28px;white-space:normal}
  table.resp td.empty::before{content:none}table.resp td.empty{display:block;text-align:center}
  table.resp td.act{justify-content:flex-end;padding-top:8px}table.resp td.act::before{content:none}
 }
+
+a.lnk{color:#1a56db;text-decoration:underline;font-weight:600}
+a.lnk:hover{color:#123c9c}
+.pnote{display:inline-block;padding:2px 10px;border-radius:12px;font-size:12.5px;white-space:nowrap}
+.pnote.part{background:#fff4d6;color:#8a5a00}
+.pnote.done{background:#dcf5e3;color:#14692d}
+.pnote.over{background:#fde2e2;color:#a11d1d}

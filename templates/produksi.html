@@ -14,12 +14,16 @@
  <div class="chips" id="chips"></div>
  <div class="tablewrap"><table id="tb"></table></div>
 </div>
+<div class="chips" id="pidnote" style="display:none"></div>
 <div id="listView" style="display:none"></div>
 {% endblock %}
 {% block script %}<script>
 const $f=document.getElementById('f'),$t=document.getElementById('t'),$b=document.getElementById('by');
 $t.value=todayISO();$f.value=defaultFrom();
+const INIT={{ init|tojson }};
+if(INIT.pid){$f.value=INIT.tanggal;if($t.value<INIT.tanggal)$t.value=INIT.tanggal;}
 const range={from:$f.value,to:$t.value};
+if(INIT.pid)range.id=INIT.pid;
 const crud=new Crud(document.getElementById('listView'),'produksi',{hideAdd:true,noRange:true,range,onChange:()=>run(),
  filterPanel:{
   title:'Produksi',
@@ -38,18 +42,22 @@ async function run(){
  const q=new URLSearchParams({from:$f.value,to:$t.value,by:$b.value});
  document.getElementById('xl').href='/export/rekap?'+q;
  const r=await (await fetch('/api/rekap?'+q)).json();const tb=document.getElementById('tb');tb.innerHTML='';
- const heads=[r.label,'Baris'].concat(r.cats.map(c=>c[0].toUpperCase()+c.slice(1)),['Jumlah']);
+ const heads=[r.label,'Baris'].concat(r.cats.map(c=>(r.labels&&r.labels[c])||c),['Jumlah']);
  tb.append(h('thead',{},h('tr',{},heads.map((x,i)=>h('th',{class:i>0?'num':''},x)))));
  const body=h('tbody');
  if(!r.rows.length)body.append(h('tr',{},h('td',{colspan:heads.length,class:'empty'},'Belum ada produksi pada rentang ini. Klik "+ Tambah Produksi".')));
- for(const x of r.rows){body.append(h('tr',{class:x.total?'total':''},
-  h('td',{},$b.value==='tanggal'&&!x.total?fmtDate(x.grp):x.grp),h('td',{class:'num'},fmtNum(x.baris)),
+ for(const x of r.rows){body.append(h('tr',{class:x.total||x.awal?'total':''},
+  h('td',{},$b.value==='tanggal'&&!x.total&&!x.awal?fmtDate(x.grp):x.grp),h('td',{class:'num'},fmtNum(x.baris)),
   r.cats.map(c=>h('td',{class:'num'},fmtNum(x[c]))),h('td',{class:'num'},h('b',{},fmtNum(x.jumlah)))));}
  tb.append(body);
- const tot=r.rows.find(x=>x.total);const ch=document.getElementById('chips');ch.innerHTML='';
+ const tot=r.rows.find(x=>x.total&&!x.saldo);const ch=document.getElementById('chips');ch.innerHTML='';
  if(tot)ch.append(h('span',{class:'chip'},h('b',{},tot.baris.toLocaleString('id-ID')),' input'),
   h('span',{class:'chip big'},'Total produksi ',h('b',{},(tot.jumlah||0).toLocaleString('id-ID'))));}
-function setRange(){if(!$f.value)$f.value=defaultFrom();if(!$t.value)$t.value=todayISO();
+function clearPid(){delete range.id;document.getElementById('pidnote').style.display='none';}
+function showPid(){const n=document.getElementById('pidnote');n.innerHTML='';n.style.display='';
+ n.append(h('span',{class:'chip'},'Menampilkan 1 input produksi (#'+INIT.pid+') '),
+  h('button',{class:'btn sm',onclick:()=>{clearPid();crud.ready.then(()=>{crud.page=1;crud.load();});}},'Tampilkan semua'));}
+function setRange(){if(range.id)clearPid();if(!$f.value)$f.value=defaultFrom();if(!$t.value)$t.value=todayISO();
  if($f.value>$t.value){if(document.activeElement===$f)$t.value=$f.value;else $f.value=$t.value;}
  range.from=$f.value;range.to=$t.value;crud.ready.then(()=>{crud.page=1;crud.load();});run();}
 $f.onchange=$t.onchange=setRange;$b.onchange=run;
@@ -61,4 +69,5 @@ document.querySelectorAll('#seg button').forEach(b=>b.onclick=()=>{
  document.getElementById('xl').style.display=v==='rekap'?'':'none';});
 document.getElementById('add').onclick=()=>crud.ready.then(()=>crud.openForm());
 run();
+if(INIT.pid){showPid();document.querySelector('#seg button[data-v=daftar]').click();}
 </script>{% endblock %}

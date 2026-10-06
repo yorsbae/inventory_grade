@@ -10,7 +10,7 @@ const made={};
 function show(k){document.querySelectorAll('.pane').forEach(p=>p.style.display='none');
  document.getElementById('p_'+k).style.display='';
  document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('on',b.dataset.k===k));
- if(!made[k]){made[k]=new Crud(document.getElementById('p_'+k),k);}}
+ if(!made[k]){made[k]=new Crud(document.getElementById('p_'+k),k,k==='kolom_prod'?{onChange:()=>{delete made.opening_prod;delete made.produksi;}}:{});}}
 document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>show(b.dataset.k));
 show('{{ tabs[0][0] }}');
 </script>{% endblock %}

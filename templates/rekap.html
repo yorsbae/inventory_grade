@@ -17,7 +17,7 @@ async function run(){
  const q=new URLSearchParams({from:$f.value,to:$t.value,by:$b.value});
  document.getElementById('xl').href='/export/rekap?'+q;
  const r=await (await fetch('/api/rekap?'+q)).json();const tb=document.getElementById('tb');tb.innerHTML='';
- const heads=[r.label,'Baris'].concat(r.cats.map(c=>c[0].toUpperCase()+c.slice(1)),['Jumlah']);
+ const heads=[r.label,'Baris'].concat(r.cats.map(c=>(r.labels&&r.labels[c])||c),['Jumlah']);
  tb.append(h('thead',{},h('tr',{},heads.map(x=>h('th',{},x)))));
  const body=h('tbody');
  if(!r.rows.length)body.append(h('tr',{},h('td',{colspan:heads.length,class:'empty'},'Tidak ada data produksi pada rentang ini.')));

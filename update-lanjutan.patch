@@ -1,0 +1,348 @@
+diff --git a/README.md b/README.md
+index 16cc4d4..d4cf8ca 100644
+--- a/README.md
++++ b/README.md
+@@ -9,7 +9,7 @@
+ Terminal: `pip install flask openpyxl waitress` lalu `python app.py` (Linux/macOS: `python3`).
+ 
+ ## 5 halaman
+-1. **DB** - master: Motif, Jenis, Stok Awal Sistem (per Kode Motif - Motif - Jenis), Ket & Rumus, Dept, Ket Produksi, Pengrajin, Karyawan, **Kolom Produksi** (judul kolom Wadimor, Junior, dst: tambah/ganti judul/hapus), **Stok Awal Produksi** (saldo pembuka per Kode Motif untuk tiap kolom produksi), dan **Produksi** (kelola data input).
++1. **DB** - master: Motif, Jenis, Stok Awal Sistem (per Kode Motif - Motif - Jenis), Ket & Rumus, Dept, Ket Produksi, Pengrajin, Karyawan, **Kolom Produksi** (judul kolom Wadimor, Junior, dst: tambah/ganti judul/hapus), **Stok Awal Produksi** (saldo pembuka per Kode Motif untuk tiap kolom produksi).
+ 2. **Produksi** - rekap produksi + tombol "+ Tambah Produksi" (form overlay). Tab "Daftar Input" untuk edit/hapus.
+ 3. **Data Masuk** - daftar + "+ Tambah Data Masuk" (1 SSTB = banyak baris barang).
+ 4. **Data Keluar** - sama, plus info stok tersedia dan peringatan / mode ketat.
+diff --git a/app.py b/app.py
+index 0c41634..7945dfa 100644
+--- a/app.py
++++ b/app.py
+@@ -91,6 +91,8 @@ SPECS = {
+                            C("motif", "Motif", "auto", sql="r_kode_motif.nama_motif", hc="FF0000"),
+                            C("jenis", "Jenis", "auto", sql="rj.nama", hc="FF0000"),
+                            C("link_masuk", "Link Barang Masuk", "linkref", src="masuklink",
++                             filtersql="""(SELECT d.sstb FROM dokumen_item i JOIN dokumen d ON d.id=i.dokumen_id
++                                 WHERE i.id=t.link_masuk_id)""",
+                              labelsql="""(SELECT d.sstb||' • '||mo.kode_motif||' ('||i.jumlah||') #'||i.id
+                                  FROM dokumen_item i JOIN dokumen d ON d.id=i.dokumen_id
+                                  JOIN ref_motif mo ON mo.id=i.motif_id WHERE i.id=t.link_masuk_id)""")]
+@@ -113,6 +115,10 @@ def reload_cats(db):
+         jm = dict(cols[j], sql=JUMLAH_EXPR)
+         SPECS[key]["cols"] = cols[:i] + [C(c, LABELS[c], "int", cat=1) for c in CATS] + [jm] + cols[j + 1:]
+ 
++def jumlah_sql(alias):
++    """Ekspresi jumlah semua kolom produksi untuk alias tabel produksi tertentu."""
++    return "(" + ("+".join(f"{alias}.{c}" for c in CATS) or "0") + ")"
++
+ def kolom_slug(db, nama):
+     """Nama kolom DB yang aman (diawali k_) dan belum dipakai di tabel produksi / opening_prod."""
+     base = "k_" + (re.sub(r"[^a-z0-9]+", "_", nama.lower()).strip("_") or "kolom")
+@@ -480,7 +486,7 @@ def col_info(key):
+         elif c["t"] == "auto":
+             out[n] = (f"({c['sql']})", c["t"])
+         elif c["t"] == "linkref":
+-            out[n] = (f"({c['labelsql']})", c["t"])
++            out[n] = (f"({c.get('filtersql') or c['labelsql']})", c["t"])  # filter/cari pakai SSTB, sesuai yang tampil
+         else:
+             out[n] = (f"t.{n}", c["t"])
+     return out
+@@ -545,6 +551,11 @@ def list_filters(key, args):
+         where.append(f"t.{dc}>=?"); params.append(args.get("from") or default_from())
+         if args.get("to"):
+             where.append(f"t.{dc}<=?"); params.append(args["to"])
++    if (args.get("id") or "").isdigit():  # buka satu baris (mis. dari hyperlink Link Produksi)
++        where.append("t.id=?"); params.append(int(args["id"]))
++    kat = args.get("kat")
++    if kat and kat in CATS and key in ("opening_prod", "produksi"):  # kategori = kolom produksi (Wadimor, Junior, ...)
++        where.append(f"t.{kat}<>0")
+     if args.get("jenis") and key in JENIS_FILTER:
+         where.append(f"{JENIS_FILTER[key]}=(SELECT id FROM ref_jenis WHERE nama=?)")
+         params.append(args["jenis"])
+@@ -599,7 +610,7 @@ def api_distinct(key):
+ def api_meta(key):
+     s = spec_or_404(key)
+     return jsonify(key=key, title=s["title"], datecol=s.get("datecol"), cats=CATS,
+-                   cols=[{k: v for k, v in c.items() if k in ("n", "l", "t", "src", "req", "num", "ro")} for c in s["cols"]])
++                   cols=[{k: v for k, v in c.items() if k in ("n", "l", "t", "src", "req", "num", "ro", "cat")} for c in s["cols"]])
+ 
+ OPT_LIMIT_DEFAULT, OPT_LIMIT_MAX = 50, 200  # rekomendasi input: tidak pernah kirim semua data sekaligus
+ 
+@@ -627,7 +638,7 @@ def search_produksilink(db, q, limit):
+         params += [f"%{q}%"] * 3
+     w = ("WHERE " + " AND ".join(where)) if where else ""
+     rows = db.execute(f"""SELECT p.id, p.tgl_produksi, pm.kode_motif, pm.nama_motif, kr.nama nama,
+-            ({JUMLAH_EXPR.replace('t.', 'p.')}) jumlah
++            ({jumlah_sql('p')}) jumlah
+         FROM produksi p LEFT JOIN ref_motif pm ON pm.id=p.kode_motif_id
+         LEFT JOIN ref_karyawan kr ON kr.id=p.nama_id
+         {w} ORDER BY p.tgl_produksi DESC, p.id DESC LIMIT ?""", params + [limit]).fetchall()
+@@ -832,9 +843,16 @@ DOC_COLOR = {"masuk": "ED7D31", "keluar": "70AD47"}
+ 
+ LINK_PRODUKSI_LABEL_SQL = """(SELECT pm.kode_motif||' • '||p.tgl_produksi||' #'||p.id
+     FROM produksi p LEFT JOIN ref_motif pm ON pm.id=p.kode_motif_id WHERE p.id=i.link_produksi_id)"""
+-LINE_SEL = f"""d.sstb AS sstb, d.tanggal AS tanggal, dp.nama AS dept, m.kode_motif AS kode_motif,
++LINK_PRODUKSI_SSTB_SQL = """(SELECT d2.sstb FROM produksi p JOIN dokumen_item i2 ON i2.id=p.link_masuk_id
++    JOIN dokumen d2 ON d2.id=i2.dokumen_id WHERE p.id=i.link_produksi_id)"""
++
++def line_sel():
++    """Kolom SELECT baris barang masuk/keluar. dikerjakan = total produksi yang menaut ke baris Barang Masuk ini."""
++    return f"""d.sstb AS sstb, d.tanggal AS tanggal, dp.nama AS dept, m.kode_motif AS kode_motif,
+     m.nama_motif AS motif, j.nama AS jenis, i.jumlah AS jumlah, k.nama AS ket,
+     pg.nama AS pengrajin, k.kode AS rumus, {LINK_PRODUKSI_LABEL_SQL} AS link_produksi,
++    {LINK_PRODUKSI_SSTB_SQL} AS link_produksi_sstb,
++    (SELECT COALESCE(SUM({jumlah_sql('p')}),0) FROM produksi p WHERE p.link_masuk_id=i.id) AS dikerjakan,
+     i.id AS id, d.id AS doc_id"""
+ LINE_FROM = """FROM dokumen_item i JOIN dokumen d ON d.id=i.dokumen_id
+     JOIN ref_dept dp ON dp.id=d.dept_id JOIN ref_motif m ON m.id=i.motif_id
+@@ -853,7 +871,7 @@ def arah_or_404(name):
+ LINE_SEARCH_EXPRS = ["d.sstb", "dp.nama", "m.kode_motif", "m.nama_motif", "j.nama", "k.nama", "pg.nama", "k.kode"]
+ LINE_COL_EXPRS = {"sstb": "d.sstb", "tanggal": "d.tanggal", "dept": "dp.nama", "kode_motif": "m.kode_motif",
+                    "motif": "m.nama_motif", "jenis": "j.nama", "jumlah": "i.jumlah", "ket": "k.nama",
+-                   "pengrajin": "pg.nama", "rumus": "k.kode", "link_produksi": LINK_PRODUKSI_LABEL_SQL}
++                   "pengrajin": "pg.nama", "rumus": "k.kode", "link_produksi": LINK_PRODUKSI_SSTB_SQL}
+ 
+ def lines_filters(arah, args):
+     """daftar klausa WHERE, params — dipakai bareng oleh lines_query dan /api/distinct/lines."""
+@@ -909,7 +927,7 @@ def api_lines(name):
+     size, page = page_args(request.args)
+     total, tsum, docs = db.execute(
+         f"SELECT COUNT(*), COALESCE(SUM(i.jumlah),0), COUNT(DISTINCT d.id) {LINE_FROM} {w}", params).fetchone()
+-    rows = db.execute(f"SELECT {LINE_SEL} {LINE_FROM} {w} ORDER BY {order} LIMIT ? OFFSET ?",
++    rows = db.execute(f"SELECT {line_sel()} {LINE_FROM} {w} ORDER BY {order} LIMIT ? OFFSET ?",
+                       params + [size, (page - 1) * size]).fetchall()
+     return jsonify(rows=[dict(r) for r in rows], total=total, pages=max(1, -(-total // size)),
+                    sum=tsum, docs=docs)
+@@ -1284,7 +1302,7 @@ def export_key(key):
+ def export_lines(name):
+     arah = ARAH[name]
+     w, params, order = lines_query(arah, request.args)
+-    rows = get_db().execute(f"SELECT {LINE_SEL} {LINE_FROM} {w} ORDER BY {order}", params).fetchall()
++    rows = get_db().execute(f"SELECT {line_sel()} {LINE_FROM} {w} ORDER BY {order}", params).fetchall()
+     wb = Workbook(); ws = wb.active; ws.title = DOC_TITLE[name]
+     red = {"motif", "jenis", "rumus"}
+     hdr(ws, 1, [c[1] for c in LINE_COLS], ["FF0000" if c[0] in red else DOC_COLOR[name] for c in LINE_COLS])
+@@ -1516,15 +1534,26 @@ def home():
+ 
+ @app.get("/db")
+ def page_db():
+-    tabs = [(k, SPECS[k]["title"]) for k in ("motif", "jenis", "opening", "kolom_prod", "opening_prod", "produksi", "ket", "dept", "ketprod", "pengrajin", "karyawan")]
++    tabs = [(k, SPECS[k]["title"]) for k in ("motif", "jenis", "opening", "kolom_prod", "opening_prod", "ket", "dept", "ketprod", "pengrajin", "karyawan")]
+     return render_template("db.html", tabs=tabs, title="DB (Master Data)")
+ 
+ @app.get("/<key>")
+ def page_main(key):
++    db = get_db()
+     if key == "produksi":
+-        return render_template("produksi.html", title="Produksi")
++        init = {}
++        pid = request.args.get("pid", "")
++        r = db.execute("SELECT tgl_produksi FROM produksi WHERE id=?", (int(pid),)).fetchone() if pid.isdigit() else None
++        if r and r[0]:  # dibuka dari hyperlink Link Produksi: tampilkan satu input saja
++            init = dict(pid=int(pid), tanggal=r[0])
++        return render_template("produksi.html", title="Produksi", init=init)
+     if key in ARAH:
+-        return render_template("doc.html", arah=key, title=DOC_TITLE[key])
++        init = {}
++        sstb = (request.args.get("sstb") or "").strip()
++        r = db.execute("SELECT MIN(tanggal) FROM dokumen WHERE arah=? AND sstb=?", (ARAH[key], sstb)).fetchone() if sstb else None
++        if r and r[0]:  # dibuka dari hyperlink SSTB: filter ke SSTB itu dan sesuaikan rentang tanggal
++            init = dict(sstb=sstb, tanggal=r[0])
++        return render_template("doc.html", arah=key, title=DOC_TITLE[key], init=init)
+     if key == "stok":
+         return render_template("stok.html", title="Laporan Posisi Stok")
+     if key == "rekap":
+diff --git a/static/app.js b/static/app.js
+index 79c5d69..21d9d46 100644
+--- a/static/app.js
++++ b/static/app.js
+@@ -210,6 +210,13 @@ function categoryFilter(state, onChange, src, key, labelAll) {
+   });
+   return h('label', { class: 'catfilter' }, 'Kategori', sel);
+ }
++/* Kategori produksi = kolom produksi (Wadimor, Junior, ...): tampilkan hanya baris yang kolom itu terisi */
++function katProdFilter(state, cols, onChange) {
++  const sel = h('select', {}, h('option', { value: '' }, 'Semua Kategori'));
++  for (const c of cols) sel.append(h('option', { value: c.n }, c.l));
++  sel.addEventListener('change', () => { state.kat = sel.value; onChange(); });
++  return h('label', { class: 'catfilter' }, 'Kategori', sel);
++}
+ /* daftar tabel tercentang: pilih kolom mana yang ditampilkan, disimpan per halaman */
+ function colChecklist(storeKey, cols, onChange) {
+   let vis;
+@@ -298,7 +305,7 @@ tfoot td{font-weight:bold;background:#f7f7f7}
+ function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+ 
+ /* tabel yang boleh difilter per Jenis ("view by kategori") */
+-const JENIS_FILTER_KEYS = ['motif', 'opening', 'opening_prod', 'produksi'];
++const JENIS_FILTER_KEYS = ['motif', 'opening'];
+ 
+ /* ===========================================================================
+    Panel "Filter" terpadu — dipakai bersama oleh Barang Masuk, Produksi, Barang
+@@ -465,7 +472,8 @@ class Crud {
+       this.chipsRow = fi.chipsRow;
+     } else {
+       tb.append(searchBox(this.qstate, () => { this.page = 1; this.load(); }));
+-      if (JENIS_FILTER_KEYS.includes(this.key)) tb.append(categoryFilter(this.catstate, () => { this.page = 1; this.load(); }));
++      if (this.key === 'opening_prod') tb.append(katProdFilter(this.catstate, m.cols.filter(c => c.cat), () => { this.page = 1; this.load(); }));
++      else if (JENIS_FILTER_KEYS.includes(this.key)) tb.append(categoryFilter(this.catstate, () => { this.page = 1; this.load(); }));
+       tb.append(h('span', { class: 'grow' }));
+       const io = ioTools(this.key, () => { this.load(); if (this.o.onChange) this.o.onChange(); }, this.notify, this.impBox);
+       this.exp = io.exp; tb.append(...io.els);
+@@ -506,6 +514,7 @@ class Crud {
+     } else {
+       if (this.qstate.q) p.set('q', this.qstate.q);
+       if (this.catstate.jenis) p.set('jenis', this.catstate.jenis);
++      if (this.catstate.kat) p.set('kat', this.catstate.kat);
+       if (Object.keys(this.filters).length) p.set('filters', JSON.stringify(this.filters));
+       if (this.sort) { p.set('sort', this.sort); p.set('dir', this.dir); }
+     }
+@@ -516,8 +525,12 @@ class Crud {
+     const tr = h('tr');
+     for (const c of this.meta.cols) {
+       const v = row[c.n];
+-      tr.append(h('td', { class: this.isInt(c) ? 'num' : '', 'data-label': c.l },
+-        this.isInt(c) ? fmtNum(v) : c.t === 'date' ? fmtDate(v) : v == null ? '' : v));
++      let cell = this.isInt(c) ? fmtNum(v) : c.t === 'date' ? fmtDate(v) : v == null ? '' : v;
++      if (c.t === 'linkref' && v) {  // Link Barang Masuk: tampilkan SSTB saja, klik = buka Barang Masuk SSTB itu
++        const sstb = String(v).split(' • ')[0];
++        cell = h('a', { class: 'lnk', href: '/masuk?sstb=' + encodeURIComponent(sstb), title: 'Buka Barang Masuk ' + sstb }, sstb);
++      }
++      tr.append(h('td', { class: this.isInt(c) ? 'num' : '', 'data-label': c.l }, cell));
+     }
+     tr.append(h('td', { class: 'act', 'data-label': 'Aksi' },
+       h('button', { class: 'btn sm', onclick: () => this.openForm(row) }, 'Edit'), ' ',
+@@ -529,7 +542,7 @@ class Crud {
+     const r = await (await fetch('/api/' + this.key + '?' + this.params({ page: this.page, size: this.size }))).json();
+     this.exp.href = '/export/' + this.key + '?' + this.params();
+     const filterActive = this.pstate ? filterActiveCount(this.pstate) > 0
+-      : (this.qstate.q || this.catstate.jenis || Object.keys(this.filters).length);
++      : (this.qstate.q || this.catstate.jenis || this.catstate.kat || Object.keys(this.filters).length);
+     const emptyMsg = filterActive ? 'Tidak ada data yang cocok dengan filter.' : 'Belum ada data.';
+     renderGroupedTable(this.table, r.rows, this.pstate ? this.pstate.group : null, this.meta.cols.length + 1,
+       row => this.rowEl(row), emptyMsg);
+@@ -614,13 +627,18 @@ const DOC_COLS_BASE = [['sstb', 'SSTB'], ['tanggal', 'Tanggal', 'date'], ['dept'
+   ['motif', 'Motif'], ['jenis', 'Jenis'], ['jumlah', 'Jumlah', 'int'], ['ket', 'Ket'], ['pengrajin', 'Nama Pengrajin'], ['rumus', 'Rumus']];
+ 
+ class DocPage {
+-  constructor(root, arah) {
++  constructor(root, arah, init) {
++    init = init || {};
+     this.root = root; this.arah = arah; this.keluar = arah === 'keluar';
+     this.label = arah === 'masuk' ? 'Barang Masuk' : 'Barang Keluar';
+-    this.cols = DOC_COLS_BASE.concat(this.keluar ? [['link_produksi', 'Link Produksi']] : []);
++    this.cols = DOC_COLS_BASE.concat(this.keluar ? [['link_produksi', 'Link Produksi', 'link']] : [['ket_produksi', 'Keterangan Produksi', 'prod']]);
+     this.page = 1; this.size = PAGE_SIZES[0]; this.sticky = {};
+     this.range = { from: defaultFrom(), to: todayISO() };
+     this.pstate = newFilterState();
++    if (init.sstb) {  // dibuka dari hyperlink SSTB: filter ke SSTB itu, rentang tanggal menyesuaikan
++      this.range = { from: init.tanggal, to: init.tanggal > todayISO() ? init.tanggal : todayISO() };
++      this.pstate.filters = { sstb: [init.sstb] };
++    }
+     /* field panel Filter, disesuaikan dengan kolom yang benar-benar ada di Barang Masuk/Keluar */
+     this.filterCfg = {
+       title: this.label,
+@@ -632,7 +650,7 @@ class DocPage {
+         { n: 'rumus', l: 'Rumus' }, { n: 'ket', l: 'Keterangan' }
+       ].concat(this.keluar ? [{ n: 'link_produksi', l: 'Link Produksi' }] : []),
+       rangeField: { n: 'jumlah', l: 'Jumlah' },
+-      sortFields: this.cols.map(([n, l]) => ({ n, l })),
++      sortFields: this.cols.filter(c => c[2] !== 'prod').map(([n, l]) => ({ n, l })),
+       groupFields: [['sstb', 'SSTB'], ['tanggal', 'Tanggal'], ['dept', 'Dept'], ['kode_motif', 'Kode Motif'],
+         ['motif', 'Motif'], ['jenis', 'Jenis'], ['pengrajin', 'Nama Pengrajin'], ['rumus', 'Rumus'], ['ket', 'Keterangan']]
+         .map(([n, l]) => ({ n, l })),
+@@ -677,7 +695,10 @@ class DocPage {
+     const tr = h('tr');
+     for (const [n, l, k] of this.cols) {
+       const v = row[n];
+-      tr.append(h('td', { class: k === 'int' ? 'num' : '', 'data-label': l }, k === 'int' ? fmtNum(v) : k === 'date' ? fmtDate(v) : v == null ? '' : v));
++      let cell = k === 'int' ? fmtNum(v) : k === 'date' ? fmtDate(v) : v == null ? '' : v;
++      if (k === 'link') cell = this.linkEl(row);
++      else if (k === 'prod') cell = this.prodNote(row);
++      tr.append(h('td', { class: k === 'int' ? 'num' : '', 'data-label': l }, cell));
+     }
+     tr.append(h('td', { class: 'act', 'data-label': 'Aksi' },
+       h('button', { class: 'btn sm', title: 'Edit seluruh SSTB ini', onclick: () => this.openForm(row.doc_id) }, 'Edit'), ' ',
+@@ -685,6 +706,19 @@ class DocPage {
+       h('button', { class: 'btn sm danger', onclick: () => this.delItem(row) }, 'Hapus')));
+     return tr;
+   }
++  linkEl(row) {  // Link Produksi: tampilkan SSTB barang masuk asalnya, klik = buka input produksinya
++    const lk = row.link_produksi; if (!lk) return '';
++    const id = (lk.match(/#(\d+)\s*$/) || [])[1];
++    return h('a', { class: 'lnk', href: '/produksi?pid=' + id, title: 'Buka input produksi ini' },
++      row.link_produksi_sstb || lk.replace(/\s*#\d+$/, ''));
++  }
++  prodNote(row) {  // Barang Masuk: sudah dikerjakan berapa, sisa berapa (dari Produksi yang menaut ke baris ini)
++    const d = row.dikerjakan || 0; if (!d) return '';
++    const sisa = row.jumlah - d, id = n => n.toLocaleString('id-ID');
++    if (sisa > 0) return h('span', { class: 'pnote part' }, `Dikerjakan ${id(d)} · Sisa ${id(sisa)}`);
++    if (sisa === 0) return h('span', { class: 'pnote done' }, `Dikerjakan ${id(d)} · Selesai`);
++    return h('span', { class: 'pnote over' }, `Dikerjakan ${id(d)} · Lebih ${id(-sisa)}`);
++  }
+   async load() {
+     const r = await (await fetch(`/api/lines/${this.arah}?` + this.params({ page: this.page, size: this.size }))).json();
+     this.exp.href = `/export/${this.arah}?` + this.params();
+diff --git a/static/style.css b/static/style.css
+index 831e490..6dde106 100644
+--- a/static/style.css
++++ b/static/style.css
+@@ -119,3 +119,10 @@ td.empty{text-align:center;color:#6b7280;padding:28px;white-space:normal}
+  table.resp td.empty::before{content:none}table.resp td.empty{display:block;text-align:center}
+  table.resp td.act{justify-content:flex-end;padding-top:8px}table.resp td.act::before{content:none}
+ }
++
++a.lnk{color:#1a56db;text-decoration:underline;font-weight:600}
++a.lnk:hover{color:#123c9c}
++.pnote{display:inline-block;padding:2px 10px;border-radius:12px;font-size:12.5px;white-space:nowrap}
++.pnote.part{background:#fff4d6;color:#8a5a00}
++.pnote.done{background:#dcf5e3;color:#14692d}
++.pnote.over{background:#fde2e2;color:#a11d1d}
+diff --git a/templates/doc.html b/templates/doc.html
+index 34722c8..25db78f 100644
+--- a/templates/doc.html
++++ b/templates/doc.html
+@@ -1,4 +1,4 @@
+ {% extends "base.html" %}
+-{% block body %}<p class="hint">Satu SSTB bisa berisi beberapa baris barang. Isi SSTB, tanggal, dept, pengrajin sekali, lalu tambahkan barisnya. Daftar dibatasi ke 7 hari terakhir dan 25 baris per halaman; ubah rentang tanggal di atas, atau buka tombol "🔍 Filter" untuk mencari, memfilter per field, mengurutkan, dan mengelompokkan data. "Cetak" pada tiap baris mencetak SSTB. Link Produksi (opsional) menandai barang keluar ini berasal dari input produksi yang mana.</p>
++{% block body %}<p class="hint">Satu SSTB bisa berisi beberapa baris barang. Isi SSTB, tanggal, dept, pengrajin sekali, lalu tambahkan barisnya. Daftar dibatasi ke 7 hari terakhir dan 25 baris per halaman; ubah rentang tanggal di atas, atau buka tombol "🔍 Filter" untuk mencari, memfilter per field, mengurutkan, dan mengelompokkan data. "Cetak" pada tiap baris mencetak SSTB. Link Produksi (opsional) menandai barang keluar ini berasal dari input produksi yang mana.{% if arah == 'masuk' %} Kolom Keterangan Produksi menunjukkan berapa yang sudah dikerjakan di halaman Produksi (lewat Link Barang Masuk) dan berapa sisanya.{% endif %}</p>
+ <div id="doc"></div>{% endblock %}
+-{% block script %}<script>new DocPage(document.getElementById('doc'), '{{ arah }}');</script>{% endblock %}
++{% block script %}<script>new DocPage(document.getElementById('doc'), '{{ arah }}', {{ init|tojson }});</script>{% endblock %}
+diff --git a/templates/produksi.html b/templates/produksi.html
+index 3153ec9..c14a18a 100644
+--- a/templates/produksi.html
++++ b/templates/produksi.html
+@@ -14,12 +14,16 @@
+  <div class="chips" id="chips"></div>
+  <div class="tablewrap"><table id="tb"></table></div>
+ </div>
++<div class="chips" id="pidnote" style="display:none"></div>
+ <div id="listView" style="display:none"></div>
+ {% endblock %}
+ {% block script %}<script>
+ const $f=document.getElementById('f'),$t=document.getElementById('t'),$b=document.getElementById('by');
+ $t.value=todayISO();$f.value=defaultFrom();
++const INIT={{ init|tojson }};
++if(INIT.pid){$f.value=INIT.tanggal;if($t.value<INIT.tanggal)$t.value=INIT.tanggal;}
+ const range={from:$f.value,to:$t.value};
++if(INIT.pid)range.id=INIT.pid;
+ const crud=new Crud(document.getElementById('listView'),'produksi',{hideAdd:true,noRange:true,range,onChange:()=>run(),
+  filterPanel:{
+   title:'Produksi',
+@@ -49,7 +53,11 @@ async function run(){
+  const tot=r.rows.find(x=>x.total&&!x.saldo);const ch=document.getElementById('chips');ch.innerHTML='';
+  if(tot)ch.append(h('span',{class:'chip'},h('b',{},tot.baris.toLocaleString('id-ID')),' input'),
+   h('span',{class:'chip big'},'Total produksi ',h('b',{},(tot.jumlah||0).toLocaleString('id-ID'))));}
+-function setRange(){if(!$f.value)$f.value=defaultFrom();if(!$t.value)$t.value=todayISO();
++function clearPid(){delete range.id;document.getElementById('pidnote').style.display='none';}
++function showPid(){const n=document.getElementById('pidnote');n.innerHTML='';n.style.display='';
++ n.append(h('span',{class:'chip'},'Menampilkan 1 input produksi (#'+INIT.pid+') '),
++  h('button',{class:'btn sm',onclick:()=>{clearPid();crud.ready.then(()=>{crud.page=1;crud.load();});}},'Tampilkan semua'));}
++function setRange(){if(range.id)clearPid();if(!$f.value)$f.value=defaultFrom();if(!$t.value)$t.value=todayISO();
+  if($f.value>$t.value){if(document.activeElement===$f)$t.value=$f.value;else $f.value=$t.value;}
+  range.from=$f.value;range.to=$t.value;crud.ready.then(()=>{crud.page=1;crud.load();});run();}
+ $f.onchange=$t.onchange=setRange;$b.onchange=run;
+@@ -61,4 +69,5 @@ document.querySelectorAll('#seg button').forEach(b=>b.onclick=()=>{
+  document.getElementById('xl').style.display=v==='rekap'?'':'none';});
+ document.getElementById('add').onclick=()=>crud.ready.then(()=>crud.openForm());
+ run();
++if(INIT.pid){showPid();document.querySelector('#seg button[data-v=daftar]').click();}
+ </script>{% endblock %}

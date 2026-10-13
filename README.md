@@ -57,3 +57,7 @@ Setiap baris Barang Masuk/Keluar punya kolom **Satuan** (`ptg` atau `kodi`, defa
 ## Excel
 Semua halaman punya Import Excel, Template, dan Export. Import Data Masuk/Keluar memakai format datar
 (satu baris per barang); baris dengan SSTB sama digabung menjadi satu dokumen.
+
+## Data demo
+- `python demo_data.py` menambah contoh data (master, stok awal, Barang Masuk multi-motif, Produksi yang menaut ke SSTB, Barang Keluar yang menaut ke Produksi) pada 7 hari terakhir. Aman dijalankan ulang (dilewati bila sudah ada).
+- `python demo_data.py --hapus` menghapus data demo saja (SSTB berawalan `DEMO/` dan produksi bercatatan `[demo]`). Klik **Backup DB** dulu sebelum mencoba.

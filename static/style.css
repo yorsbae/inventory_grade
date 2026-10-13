@@ -126,3 +126,13 @@ a.lnk:hover{color:#123c9c}
 .pnote.part{background:#fff4d6;color:#8a5a00}
 .pnote.done{background:#dcf5e3;color:#14692d}
 .pnote.over{background:#fde2e2;color:#a11d1d}
+
+/* daftar Barang Masuk/Keluar: 1 SSTB = 1 baris, motif ditumpuk sejajar antar kolom */
+tr.docrow td{vertical-align:top}
+td.dl{line-height:26px;font-weight:600}
+.stack .ln{box-sizing:border-box;height:26px;line-height:26px;white-space:nowrap}
+.stack .ln.tot{border-top:1px solid #dde3ee;font-weight:700;margin-top:2px;height:24px;line-height:24px}
+.stack .ln:not(:last-child){border-bottom:1px dashed #eef1f6}
+.pnote.none{background:#eef1f6;color:#4b5563}
+@media(max-width:899px){td.dl{font-weight:400}}
+.stack .ln .pnote{padding:0 10px;line-height:20px;vertical-align:middle}

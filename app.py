@@ -91,11 +91,8 @@ SPECS = {
                            C("motif", "Motif", "auto", sql="r_kode_motif.nama_motif", hc="FF0000"),
                            C("jenis", "Jenis", "auto", sql="rj.nama", hc="FF0000"),
                            C("link_masuk", "Link Barang Masuk", "linkref", src="masuklink",
-                             filtersql="""(SELECT d.sstb FROM dokumen_item i JOIN dokumen d ON d.id=i.dokumen_id
-                                 WHERE i.id=t.link_masuk_id)""",
-                             labelsql="""(SELECT d.sstb||' • '||mo.kode_motif||' ('||i.jumlah||') #'||i.id
-                                 FROM dokumen_item i JOIN dokumen d ON d.id=i.dokumen_id
-                                 JOIN ref_motif mo ON mo.id=i.motif_id WHERE i.id=t.link_masuk_id)""")]
+                             filtersql="""(SELECT d.sstb FROM dokumen d WHERE d.id=t.link_masuk_id)""",
+                             labelsql="""(SELECT d.sstb||' #'||d.id FROM dokumen d WHERE d.id=t.link_masuk_id)""")]
                           + [C(c, LABELS[c], "int", cat=1) for c in CATS]
                           + [C("jumlah", "Jumlah", "auto", sql=JUMLAH_EXPR, num=1, hc="FF0000"),
                              C("ket", "Ket", "ref", src="ketprod"), C("catatan", "Catatan")]),
@@ -143,6 +140,18 @@ def parse_link_id(v):
     """Ambil id dari label seperti '... #123' (dipakai kolom Link, opsional)."""
     m = re.search(r"#(\d+)\s*$", str(v or ""))
     return int(m.group(1)) if m else None
+
+def resolve_masuk_link(db, v):
+    """Link Barang Masuk = SSTB (dokumen). Terima label 'SSTB #id' atau cukup nomor SSTB-nya (mis. dari Excel)."""
+    v = text_of(v)
+    if not v:
+        return None
+    fid = parse_link_id(v)
+    if fid and db.execute("SELECT 1 FROM dokumen WHERE id=? AND arah='M'", (fid,)).fetchone():
+        return fid
+    name = re.sub(r"\s*#\d+\s*$", "", v).strip()
+    r = db.execute("SELECT id FROM dokumen WHERE arah='M' AND lower(sstb)=lower(?)", (name,)).fetchone()
+    return r["id"] if r else None
 
 def dmy(v):
     try:
@@ -211,6 +220,11 @@ def init_db():
     ensure_cat_columns(db)  # kolom produksi dinamis (DB > Kolom Produksi)
     ensure_columns(db)  # tambah kolom baru ke tabel lama tanpa menghapus data
     db.execute("CREATE TABLE IF NOT EXISTS settings (k TEXT PRIMARY KEY, v TEXT)")
+    if not db.execute("SELECT 1 FROM settings WHERE k='link_masuk_per_sstb'").fetchone():
+        # versi lama: produksi.link_masuk_id menunjuk baris barang (dokumen_item). Sekarang menunjuk SSTB (dokumen).
+        db.execute("""UPDATE produksi SET link_masuk_id=(SELECT i.dokumen_id FROM dokumen_item i WHERE i.id=produksi.link_masuk_id)
+                      WHERE link_masuk_id IS NOT NULL""")
+        db.execute("INSERT INTO settings(k,v) VALUES('link_masuk_per_sstb','1')")
     db.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_dokumen ON dokumen(arah, sstb)")
     db.execute("CREATE INDEX IF NOT EXISTS ix_dokumen_tgl ON dokumen(tanggal)")
     db.execute("CREATE INDEX IF NOT EXISTS ix_item_dok ON dokumen_item(dokumen_id)")
@@ -615,18 +629,20 @@ def api_meta(key):
 OPT_LIMIT_DEFAULT, OPT_LIMIT_MAX = 50, 200  # rekomendasi input: tidak pernah kirim semua data sekaligus
 
 def search_masuklink(db, q, limit):
+    """Cari SSTB Barang Masuk (hanya nomor SSTB; motif tidak ikut dicocokkan)."""
     where, params = ["d.arah='M'"], []
     fid = parse_link_id(q) if q else None
     if fid:  # q berupa label lengkap (mis. saat validasi link yang sudah tersimpan) -> cari persis id-nya
-        where.append("i.id=?"); params.append(fid)
+        where.append("d.id=?"); params.append(fid)
     elif q:
-        where.append("(d.sstb LIKE ? OR mo.kode_motif LIKE ? OR mo.nama_motif LIKE ?)")
-        params += [f"%{q}%"] * 3
-    rows = db.execute(f"""SELECT i.id, d.sstb, d.tanggal, mo.kode_motif, mo.nama_motif, i.jumlah
-        FROM dokumen_item i JOIN dokumen d ON d.id=i.dokumen_id JOIN ref_motif mo ON mo.id=i.motif_id
-        WHERE {' AND '.join(where)} ORDER BY d.tanggal DESC, i.id DESC LIMIT ?""", params + [limit]).fetchall()
-    return [dict(v=f"{r['sstb']} • {r['kode_motif']} ({fmt_id(r['jumlah'])}) #{r['id']}",
-                sub=f"{r['nama_motif']} · {dmy(r['tanggal'])}") for r in rows]
+        where.append("d.sstb LIKE ?"); params.append(f"%{q}%")
+    rows = db.execute(f"""SELECT d.id, d.sstb, d.tanggal, dp.nama dept,
+            (SELECT COUNT(*) FROM dokumen_item i WHERE i.dokumen_id=d.id) n,
+            (SELECT COALESCE(SUM(i.jumlah),0) FROM dokumen_item i WHERE i.dokumen_id=d.id) total
+        FROM dokumen d JOIN ref_dept dp ON dp.id=d.dept_id
+        WHERE {' AND '.join(where)} ORDER BY d.tanggal DESC, d.id DESC LIMIT ?""", params + [limit]).fetchall()
+    return [dict(v=f"{r['sstb']} #{r['id']}",
+                sub=f"{dmy(r['tanggal'])} · {r['dept']} · {r['n']} baris · total {fmt_id(r['total'])}") for r in rows]
 
 def search_produksilink(db, q, limit):
     where, params = [], []
@@ -737,7 +753,12 @@ def clean_row(db, key, row, rid=None):
             else:
                 v = r["id"]
         elif t == "linkref":
-            v = parse_link_id(v) if v is not None else None  # opsional: teks tak dikenal = tidak ditautkan
+            if v is None:
+                pass
+            elif c.get("src") == "masuklink":
+                v = resolve_masuk_link(db, v)  # cukup SSTB, tidak perlu menyesuaikan motif
+            else:
+                v = parse_link_id(v)  # opsional: teks tak dikenal = tidak ditautkan
         elif v is not None:
             v = text_of(v)
             if c.get("upper"):
@@ -843,16 +864,16 @@ DOC_COLOR = {"masuk": "ED7D31", "keluar": "70AD47"}
 
 LINK_PRODUKSI_LABEL_SQL = """(SELECT pm.kode_motif||' • '||p.tgl_produksi||' #'||p.id
     FROM produksi p LEFT JOIN ref_motif pm ON pm.id=p.kode_motif_id WHERE p.id=i.link_produksi_id)"""
-LINK_PRODUKSI_SSTB_SQL = """(SELECT d2.sstb FROM produksi p JOIN dokumen_item i2 ON i2.id=p.link_masuk_id
-    JOIN dokumen d2 ON d2.id=i2.dokumen_id WHERE p.id=i.link_produksi_id)"""
+LINK_PRODUKSI_SSTB_SQL = """(SELECT d2.sstb FROM produksi p JOIN dokumen d2 ON d2.id=p.link_masuk_id
+    WHERE p.id=i.link_produksi_id)"""
 
 def line_sel():
-    """Kolom SELECT baris barang masuk/keluar. dikerjakan = total produksi yang menaut ke baris Barang Masuk ini."""
+    """Kolom SELECT baris barang masuk/keluar. dikerjakan = produksi yang menaut ke SSTB ini untuk motif baris ini."""
     return f"""d.sstb AS sstb, d.tanggal AS tanggal, dp.nama AS dept, m.kode_motif AS kode_motif,
     m.nama_motif AS motif, j.nama AS jenis, i.jumlah AS jumlah, k.nama AS ket,
     pg.nama AS pengrajin, k.kode AS rumus, {LINK_PRODUKSI_LABEL_SQL} AS link_produksi,
     {LINK_PRODUKSI_SSTB_SQL} AS link_produksi_sstb,
-    (SELECT COALESCE(SUM({jumlah_sql('p')}),0) FROM produksi p WHERE p.link_masuk_id=i.id) AS dikerjakan,
+    (SELECT COALESCE(SUM({jumlah_sql('p')}),0) FROM produksi p WHERE p.link_masuk_id=d.id AND p.kode_motif_id=i.motif_id) AS dikerjakan,
     i.id AS id, d.id AS doc_id"""
 LINE_FROM = """FROM dokumen_item i JOIN dokumen d ON d.id=i.dokumen_id
     JOIN ref_dept dp ON dp.id=d.dept_id JOIN ref_motif m ON m.id=i.motif_id
@@ -868,9 +889,12 @@ def arah_or_404(name):
         abort(404)
     return ARAH[name]
 
+DOC_TOTAL_SQL = "(SELECT COALESCE(SUM(x.jumlah),0) FROM dokumen_item x WHERE x.dokumen_id=d.id)"
+DOC_SORT = ["sstb", "tanggal", "dept", "pengrajin", "jumlah", "link_produksi"]  # kolom tingkat SSTB (1 SSTB = 1 baris di daftar)
+
 LINE_SEARCH_EXPRS = ["d.sstb", "dp.nama", "m.kode_motif", "m.nama_motif", "j.nama", "k.nama", "pg.nama", "k.kode"]
 LINE_COL_EXPRS = {"sstb": "d.sstb", "tanggal": "d.tanggal", "dept": "dp.nama", "kode_motif": "m.kode_motif",
-                   "motif": "m.nama_motif", "jenis": "j.nama", "jumlah": "i.jumlah", "ket": "k.nama",
+                   "motif": "m.nama_motif", "jenis": "j.nama", "jumlah": DOC_TOTAL_SQL, "ket": "k.nama",
                    "pengrajin": "pg.nama", "rumus": "k.kode", "link_produksi": LINK_PRODUKSI_SSTB_SQL}
 
 def lines_filters(arah, args):
@@ -921,16 +945,61 @@ def api_distinct_lines(name):
 
 @app.get("/api/lines/<name>")
 def api_lines(name):
+    """Daftar per SSTB: satu SSTB = satu baris, berisi semua motifnya (items) beserta progres produksi per motif."""
     arah = arah_or_404(name)
     db = get_db()
-    w, params, order = lines_query(arah, request.args)
+    where, params = lines_filters(arah, request.args)
+    w = "WHERE " + " AND ".join(where)
+    direction = "ASC" if request.args.get("dir") == "asc" else "DESC"
+    sort = request.args.get("sort")
+    order = f"{sort} {direction}, doc_id DESC" if sort in DOC_SORT else "tanggal DESC, doc_id DESC"
+    order = group_order(request.args, DOC_SORT, order)
     size, page = page_args(request.args)
-    total, tsum, docs = db.execute(
+    baris, tsum, ndoc = db.execute(
         f"SELECT COUNT(*), COALESCE(SUM(i.jumlah),0), COUNT(DISTINCT d.id) {LINE_FROM} {w}", params).fetchone()
-    rows = db.execute(f"SELECT {line_sel()} {LINE_FROM} {w} ORDER BY {order} LIMIT ? OFFSET ?",
-                      params + [size, (page - 1) * size]).fetchall()
-    return jsonify(rows=[dict(r) for r in rows], total=total, pages=max(1, -(-total // size)),
-                   sum=tsum, docs=docs)
+    docs = [dict(r) for r in db.execute(
+        f"""SELECT d.id AS doc_id, d.sstb AS sstb, d.tanggal AS tanggal, dp.nama AS dept, pg.nama AS pengrajin,
+               {DOC_TOTAL_SQL} AS jumlah, MIN({LINK_PRODUKSI_SSTB_SQL}) AS link_produksi
+            {LINE_FROM} {w} GROUP BY d.id ORDER BY {order} LIMIT ? OFFSET ?""",
+        params + [size, (page - 1) * size]).fetchall()]
+    ids = [d["doc_id"] for d in docs]
+    by = {i: [] for i in ids}
+    prod = {}
+    if ids:
+        ph = ",".join("?" * len(ids))
+        for r in db.execute(f"""SELECT i.id, i.dokumen_id, i.motif_id, m.kode_motif, m.nama_motif AS motif, j.nama AS jenis,
+                k.nama AS ket, k.kode AS rumus, i.jumlah, {LINK_PRODUKSI_LABEL_SQL} AS link_produksi,
+                {LINK_PRODUKSI_SSTB_SQL} AS link_produksi_sstb
+            FROM dokumen_item i JOIN ref_motif m ON m.id=i.motif_id LEFT JOIN ref_jenis j ON j.id=m.jenis_id
+            JOIN ref_ket k ON k.id=i.ket_id WHERE i.dokumen_id IN ({ph}) ORDER BY i.dokumen_id, i.id""", ids):
+            by[r["dokumen_id"]].append(dict(r))
+        if arah == "M":  # progres: produksi yang menaut ke SSTB ini, dihitung per motif
+            for r in db.execute(f"""SELECT p.link_masuk_id AS d, p.kode_motif_id AS m, COALESCE(SUM({jumlah_sql('p')}),0) AS s
+                FROM produksi p WHERE p.link_masuk_id IN ({ph}) GROUP BY p.link_masuk_id, p.kode_motif_id""", ids):
+                prod[(r["d"], r["m"])] = r["s"]
+    for d in docs:
+        its = by[d["doc_id"]]
+        tot = {}
+        for it in its:
+            tot[it["motif_id"]] = tot.get(it["motif_id"], 0) + it["jumlah"]
+        seen = set()
+        for it in its:  # satu motif bisa punya >1 baris (Ket beda): progres ditampilkan sekali, di baris pertama motif itu
+            first = it["motif_id"] not in seen
+            seen.add(it["motif_id"])
+            if arah == "M" and first:
+                dk = prod.get((d["doc_id"], it["motif_id"]), 0)
+                it["total_motif"], it["dikerjakan"], it["sisa"] = tot[it["motif_id"]], dk, tot[it["motif_id"]] - dk
+        d["items"] = its
+        d["lain"] = sum(v for (dd, mm), v in prod.items() if dd == d["doc_id"] and mm not in tot)  # produksi motif di luar SSTB
+    return jsonify(rows=docs, total=ndoc, pages=max(1, -(-ndoc // size)), sum=tsum, docs=ndoc, baris=baris)
+
+@app.get("/api/doc/<name>/find")
+def api_doc_find(name):
+    """Cari SSTB persis (untuk form: bila sudah ada, tambah motif ke SSTB itu, bukan bikin baru)."""
+    arah = arah_or_404(name)
+    sstb = (request.args.get("sstb") or "").strip()
+    r = get_db().execute("SELECT id FROM dokumen WHERE arah=? AND lower(sstb)=lower(?)", (arah, sstb)).fetchone() if sstb else None
+    return jsonify(id=r["id"] if r else None)
 
 @app.get("/api/doc/<name>/<int:doc_id>")
 def api_doc_get(name, doc_id):
@@ -1507,6 +1576,51 @@ def backup_download():
     src = sqlite3.connect(DB_PATH); dst = sqlite3.connect(p)
     src.backup(dst); dst.close(); src.close()
     return send_file(p, as_attachment=True, download_name=os.path.basename(p))
+
+@app.post("/restore")
+def restore_db():
+    """Pulihkan database dari file cadangan (.db). Data saat ini dicadangkan dulu ke backup/pra-restore-*.db."""
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify(ok=False, error="File belum dipilih"), 400
+    os.makedirs(DATA_DIR, exist_ok=True); os.makedirs(BACKUP_DIR, exist_ok=True)
+    tmp = os.path.join(DATA_DIR, "restore-upload.tmp")
+    f.save(tmp)
+    src = None
+    try:
+        with open(tmp, "rb") as fh:
+            if fh.read(16) != b"SQLite format 3\x00":
+                return jsonify(ok=False, error="Bukan file database (.db) yang valid"), 400
+        src = sqlite3.connect(tmp)
+        if src.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+            return jsonify(ok=False, error="File database rusak (integrity check gagal)"), 400
+        tables = {r[0] for r in src.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "ref_motif" not in tables or not ({"dokumen", "trx_masuk"} & tables):
+            return jsonify(ok=False, error="Ini bukan database Stok Grade (tabel master/transaksi tidak ditemukan)"), 400
+        pra = os.path.join(BACKUP_DIR, f"pra-restore-{dt.datetime.now():%Y%m%d-%H%M%S}.db")
+        if os.path.exists(DB_PATH):
+            cur = sqlite3.connect(DB_PATH); bk = sqlite3.connect(pra)
+            cur.backup(bk); bk.close(); cur.close()
+        dst = sqlite3.connect(DB_PATH)
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+        src.close(); src = None
+        init_db()  # migrasi otomatis bila file cadangan dari versi lebih lama
+        con = sqlite3.connect(DB_PATH); con.row_factory = sqlite3.Row
+        try:
+            reload_cats(con)
+        finally:
+            con.close()
+        return jsonify(ok=True, pra=os.path.basename(pra))
+    except Exception as e:
+        return jsonify(ok=False, error=f"Restore gagal: {e}"), 500
+    finally:
+        if src:
+            src.close()
+        if os.path.exists(tmp):
+            os.remove(tmp)
 
 def daily_backup(keep=30):
     os.makedirs(BACKUP_DIR, exist_ok=True)

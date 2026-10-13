@@ -166,7 +166,7 @@ function ioTools(key, onDone, notify, impBox, hideTemplate) {
           hideTemplate ? null : h('a', { class: 'btn', href: '/template/' + key }, 'Template'), exp].filter(Boolean)
   };
 }
-function pagerInto(el, page, pages, total, extra, go, size, onSize) {
+function pagerInto(el, page, pages, total, extra, go, size, onSize, unit) {
   el.innerHTML = '';
   const from = total ? (page - 1) * size + 1 : 0, to = Math.min(page * size, total);
   const sel = h('select', { class: 'pgsize', title: 'Baris per halaman', onchange: () => onSize(parseInt(sel.value)) },
@@ -174,7 +174,7 @@ function pagerInto(el, page, pages, total, extra, go, size, onSize) {
   el.append(h('button', { class: 'btn sm', disabled: page <= 1, onclick: () => go(page - 1) }, '‹ Prev'),
     `Hal ${page} / ${pages}`,
     h('button', { class: 'btn sm', disabled: page >= pages, onclick: () => go(page + 1) }, 'Next ›'),
-    sel, `· ${from.toLocaleString('id-ID')}–${to.toLocaleString('id-ID')} dari ${total.toLocaleString('id-ID')} baris`, extra || '');
+    sel, `· ${from.toLocaleString('id-ID')}–${to.toLocaleString('id-ID')} dari ${total.toLocaleString('id-ID')} ${unit || 'baris'}`, extra || '');
 }
 function rangeInputs(range, onChange) {
   const a = h('input', { type: 'date', value: range.from || '' }), b = h('input', { type: 'date', value: range.to || '' });
@@ -527,7 +527,7 @@ class Crud {
       const v = row[c.n];
       let cell = this.isInt(c) ? fmtNum(v) : c.t === 'date' ? fmtDate(v) : v == null ? '' : v;
       if (c.t === 'linkref' && v) {  // Link Barang Masuk: tampilkan SSTB saja, klik = buka Barang Masuk SSTB itu
-        const sstb = String(v).split(' • ')[0];
+        const sstb = String(v).replace(/\s*#\d+\s*$/, '');
         cell = h('a', { class: 'lnk', href: '/masuk?sstb=' + encodeURIComponent(sstb), title: 'Buka Barang Masuk ' + sstb }, sstb);
       }
       tr.append(h('td', { class: this.isInt(c) ? 'num' : '', 'data-label': c.l }, cell));
@@ -649,10 +649,10 @@ class DocPage {
         { n: 'jenis', l: 'Jenis' }, { n: 'pengrajin', l: 'Nama Pengrajin' },
         { n: 'rumus', l: 'Rumus' }, { n: 'ket', l: 'Keterangan' }
       ].concat(this.keluar ? [{ n: 'link_produksi', l: 'Link Produksi' }] : []),
-      rangeField: { n: 'jumlah', l: 'Jumlah' },
-      sortFields: this.cols.filter(c => c[2] !== 'prod').map(([n, l]) => ({ n, l })),
-      groupFields: [['sstb', 'SSTB'], ['tanggal', 'Tanggal'], ['dept', 'Dept'], ['kode_motif', 'Kode Motif'],
-        ['motif', 'Motif'], ['jenis', 'Jenis'], ['pengrajin', 'Nama Pengrajin'], ['rumus', 'Rumus'], ['ket', 'Keterangan']]
+      rangeField: { n: 'jumlah', l: 'Jumlah SSTB' },
+      sortFields: [['sstb', 'SSTB'], ['tanggal', 'Tanggal'], ['dept', 'Dept'], ['pengrajin', 'Nama Pengrajin'], ['jumlah', 'Jumlah SSTB']]
+        .concat(this.keluar ? [['link_produksi', 'Link Produksi']] : []).map(([n, l]) => ({ n, l })),
+      groupFields: [['sstb', 'SSTB'], ['tanggal', 'Tanggal'], ['dept', 'Dept'], ['pengrajin', 'Nama Pengrajin']]
         .map(([n, l]) => ({ n, l })),
       fetchDistinct: async col => await (await fetch(`/api/distinct/lines/${this.arah}?col=${col}&` + this.params())).json()
     };
@@ -691,40 +691,67 @@ class DocPage {
     if (st.group) p.set('group', st.group);
     return p;
   }
+  /* 1 SSTB = 1 baris tabel. Kolom tingkat-barang (motif, jumlah, ket, progres) berisi satu baris kecil per motif, sejajar antar kolom. */
   rowEl(row) {
-    const tr = h('tr');
+    const tr = h('tr', { class: 'docrow' });
+    const items = row.items || [];
+    const ln = (txt, cls, title) => h('div', { class: 'ln' + (cls ? ' ' + cls : ''), title: title || (typeof txt === 'string' ? txt : null) }, txt);
+    const stack = lines => h('div', { class: 'stack' }, lines);
+    const itemCell = n => {
+      switch (n) {
+        case 'kode_motif': return stack(items.map(it => ln(it.kode_motif)));
+        case 'motif': return stack(items.map(it => ln(it.motif || '')));
+        case 'jenis': return stack(items.map(it => ln(it.jenis || '')));
+        case 'ket': return stack(items.map(it => ln(it.ket || '')));
+        case 'rumus': return stack(items.map(it => ln(it.rumus || '')));
+        case 'jumlah': return stack(items.map(it => ln(fmtNum(it.jumlah))).concat(items.length > 1 ? [ln('Total ' + fmtNum(row.jumlah), 'tot')] : []));
+        case 'link_produksi': return stack(items.map(it => ln(this.linkEl(it))));
+        case 'ket_produksi': return this.prodCell(row);
+      }
+      return null;
+    };
     for (const [n, l, k] of this.cols) {
-      const v = row[n];
-      let cell = k === 'int' ? fmtNum(v) : k === 'date' ? fmtDate(v) : v == null ? '' : v;
-      if (k === 'link') cell = this.linkEl(row);
-      else if (k === 'prod') cell = this.prodNote(row);
-      tr.append(h('td', { class: k === 'int' ? 'num' : '', 'data-label': l }, cell));
+      const cell = itemCell(n);
+      if (cell) tr.append(h('td', { class: k === 'int' ? 'num' : '', 'data-label': l }, cell));
+      else {
+        const v = row[n];
+        tr.append(h('td', { class: 'dl', 'data-label': l }, k === 'date' ? fmtDate(v) : v == null ? '' : v));
+      }
     }
     tr.append(h('td', { class: 'act', 'data-label': 'Aksi' },
-      h('button', { class: 'btn sm', title: 'Edit seluruh SSTB ini', onclick: () => this.openForm(row.doc_id) }, 'Edit'), ' ',
+      h('button', { class: 'btn sm', title: 'Edit SSTB ini (tambah / ubah motif)', onclick: () => this.openForm(row.doc_id) }, 'Edit'), ' ',
       h('button', { class: 'btn sm', title: 'Cetak SSTB', onclick: () => this.printRow(row) }, 'Cetak'), ' ',
-      h('button', { class: 'btn sm danger', onclick: () => this.delItem(row) }, 'Hapus')));
+      h('button', { class: 'btn sm danger', title: 'Hapus seluruh SSTB ini', onclick: () => this.delDoc(row) }, 'Hapus')));
     return tr;
   }
-  linkEl(row) {  // Link Produksi: tampilkan SSTB barang masuk asalnya, klik = buka input produksinya
-    const lk = row.link_produksi; if (!lk) return '';
+  linkEl(it) {  // Link Produksi (Barang Keluar): tampilkan SSTB barang masuk asalnya, klik = buka input produksinya
+    const lk = it.link_produksi; if (!lk) return '';
     const id = (lk.match(/#(\d+)\s*$/) || [])[1];
     return h('a', { class: 'lnk', href: '/produksi?pid=' + id, title: 'Buka input produksi ini' },
-      row.link_produksi_sstb || lk.replace(/\s*#\d+$/, ''));
+      it.link_produksi_sstb || lk.replace(/\s*#\d+$/, ''));
   }
-  prodNote(row) {  // Barang Masuk: sudah dikerjakan berapa, sisa berapa (dari Produksi yang menaut ke baris ini)
-    const d = row.dikerjakan || 0; if (!d) return '';
-    const sisa = row.jumlah - d, id = n => n.toLocaleString('id-ID');
-    if (sisa > 0) return h('span', { class: 'pnote part' }, `Dikerjakan ${id(d)} · Sisa ${id(sisa)}`);
-    if (sisa === 0) return h('span', { class: 'pnote done' }, `Dikerjakan ${id(d)} · Selesai`);
-    return h('span', { class: 'pnote over' }, `Dikerjakan ${id(d)} · Lebih ${id(-sisa)}`);
+  prodCell(row) {  // Barang Masuk: progres produksi PER MOTIF dalam SSTB ini (dikerjakan / sisa)
+    const id = n => n.toLocaleString('id-ID');
+    const lines = (row.items || []).map(it => {
+      let chip = '';
+      if (it.sisa != null) {  // null = baris ke-2 dst dari motif yang sama (sudah dihitung di baris pertamanya)
+        const d = it.dikerjakan || 0, sisa = it.sisa;
+        if (!d) chip = h('span', { class: 'pnote none' }, `Belum dikerjakan · Sisa ${id(sisa)}`);
+        else if (sisa > 0) chip = h('span', { class: 'pnote part' }, `Dikerjakan ${id(d)} · Sisa ${id(sisa)}`);
+        else if (sisa === 0) chip = h('span', { class: 'pnote done' }, `Dikerjakan ${id(d)} · Selesai`);
+        else chip = h('span', { class: 'pnote over' }, `Dikerjakan ${id(d)} · Lebih ${id(-sisa)}`);
+      }
+      return h('div', { class: 'ln' }, chip);
+    });
+    if (row.lain) lines.push(h('div', { class: 'ln' }, h('span', { class: 'pnote over', title: 'Produksi yang menaut ke SSTB ini tetapi motifnya tidak ada di SSTB' }, `Motif lain: ${id(row.lain)}`)));
+    return h('div', { class: 'stack' }, lines);
   }
   async load() {
     const r = await (await fetch(`/api/lines/${this.arah}?` + this.params({ page: this.page, size: this.size }))).json();
     this.exp.href = `/export/${this.arah}?` + this.params();
     this.chips.innerHTML = '';
     this.chips.append(h('span', { class: 'chip' }, h('b', {}, r.docs.toLocaleString('id-ID')), ' SSTB'),
-      h('span', { class: 'chip' }, h('b', {}, r.total.toLocaleString('id-ID')), ' baris'),
+      h('span', { class: 'chip' }, h('b', {}, r.baris.toLocaleString('id-ID')), ' baris barang'),
       h('span', { class: 'chip big' }, 'Total jumlah ', h('b', {}, r.sum.toLocaleString('id-ID'))));
     const emptyMsg = filterActiveCount(this.pstate)
       ? 'Tidak ada data yang cocok dengan filter.'
@@ -732,17 +759,17 @@ class DocPage {
     renderGroupedTable(this.table, r.rows, this.pstate.group, this.cols.length + 1, row => this.rowEl(row), emptyMsg);
     this.tbody = this.table.querySelector('tbody');
     pagerInto(this.pager, this.page, r.pages, r.total, '', p => { this.page = p; this.load(); },
-      this.size, n => { this.size = n; this.page = 1; this.load(); });
+      this.size, n => { this.size = n; this.page = 1; this.load(); }, 'SSTB');
   }
   async printRow(row) {
     const d = await (await fetch(`/api/doc/${this.arah}/${row.doc_id}`)).json();
     printSSTB(d, this.label);
   }
-  async delItem(row) {
-    if (!confirm(`Hapus baris ${row.kode_motif} (${row.jumlah}) dari SSTB ${row.sstb}?`)) return;
-    await fetch(`/api/item/${this.arah}/${row.id}`, { method: 'DELETE' }); this.load();
+  async delDoc(row) {
+    if (!confirm(`Hapus seluruh SSTB ${row.sstb} beserta ${row.items.length} baris barangnya?`)) return;
+    await fetch(`/api/doc/${this.arah}/${row.doc_id}`, { method: 'DELETE' }); this.load();
   }
-  async openForm(docId) {
+  async openForm(docId, addMore) {
     let doc = null;
     if (docId) doc = await (await fetch(`/api/doc/${this.arah}/${docId}`)).json();
     const st = this.sticky, keluar = this.keluar;
@@ -794,7 +821,11 @@ class DocPage {
         r.motif.snap(); r.ket.snap();
         if (keluar && r.link) { r.link.value = it.link_produksi || ''; if (it.link_produksi) r.link.snap(); }
       }
-      this.rows.push(r); itemsBox.append(r.el); return r;
+      if (!it && this.rows.length) {  // baris baru dalam SSTB yang sama: Ket ikut baris sebelumnya (tinggal ganti motif)
+        const prev = this.rows[this.rows.length - 1];
+        if (prev.ket.value) { r.ket.value = prev.ket.value; r.ket.snap(); }
+      }
+      this.rows.push(r); itemsBox.append(r.el); upTotal(); return r;
     };
     (doc && doc.items.length ? doc.items : [null]).forEach(addRow); upTotal();
     tgl.addEventListener('change', () => this.rows.forEach(stockHint));
@@ -822,7 +853,20 @@ class DocPage {
       if (!docId) this.sticky = { tanggal: payload.tanggal, dept: payload.dept };
       this.load(); if (again && !docId) this.openForm();
     };
-    sstb.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); this.rows[0].motif.focus(); } });
+    let jumping = false;
+    const cekSstb = async () => {  // SSTB sudah ada -> buka SSTB itu & tambahkan motif baru (1 SSTB = 1 sesi, motif A, B, C)
+      if (docId || jumping || !sstb.value.trim()) return false;
+      const f = await (await fetch(`/api/doc/${this.arah}/find?` + new URLSearchParams({ sstb: sstb.value.trim() }))).json();
+      if (!f.id) return false;
+      jumping = true; modal.close();
+      this.notify(`SSTB ${sstb.value.trim()} sudah ada — silakan tambahkan motif berikutnya di bawah.`, 'ok');
+      this.openForm(f.id, true); return true;
+    };
+    sstb.addEventListener('blur', e => { if (e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('.modal-f, .modal-h')) return; cekSstb(); });
+    sstb.addEventListener('keydown', async e => {
+      if (e.key !== 'Enter') return; e.preventDefault();
+      if (!(await cekSstb())) this.rows[0].motif.focus();
+    });
     const foot = [];
     if (docId) {
       foot.push(h('button', { class: 'btn danger mr-auto', onclick: async () => {
@@ -835,6 +879,27 @@ class DocPage {
     if (!docId) foot.push(h('button', { class: 'btn', onclick: () => send(true) }, 'Simpan & Tambah Lagi'));
     foot.push(h('button', { class: 'btn primary', onclick: () => send(false) }, docId ? 'Update' : 'Simpan'));
     const modal = openModal((docId ? 'Edit ' : 'Tambah ') + this.label + (docId ? ' — ' + doc.sstb : ''), body, foot);
-    (docId ? this.rows[0].motif : sstb).focus();
+    if (addMore && docId) addRow().motif.focus(); else (docId ? this.rows[0].motif : sstb).focus();
   }
 }
+
+/* ===== Restore DB: pulihkan dari file cadangan (.db) ===== */
+(function () {
+  const btn = document.getElementById('restoreBtn'), inp = document.getElementById('restoreFile');
+  if (!btn || !inp) return;
+  btn.addEventListener('click', e => { e.preventDefault(); inp.value = ''; inp.click(); });
+  inp.addEventListener('change', async () => {
+    const f = inp.files[0]; if (!f) return;
+    if (!confirm(`PULIHKAN DATABASE dari "${f.name}"?\n\nSeluruh data saat ini akan DIGANTI dengan isi file ini. ` +
+      `Data saat ini otomatis dicadangkan dulu di folder backup (pra-restore-...).`)) return;
+    const fd = new FormData(); fd.append('file', f);
+    btn.textContent = 'Memulihkan…';
+    try {
+      const res = await fetch('/restore', { method: 'POST', body: fd });
+      const r = await res.json();
+      if (!res.ok || !r.ok) { alert(r.error || 'Restore gagal'); btn.textContent = 'Restore DB'; return; }
+      alert(`Database berhasil dipulihkan.\nData sebelumnya disimpan sebagai backup/${r.pra}.`);
+      location.reload();
+    } catch (err) { alert('Restore gagal: ' + err); btn.textContent = 'Restore DB'; }
+  });
+})();

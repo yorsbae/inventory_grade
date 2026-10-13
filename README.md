@@ -25,9 +25,23 @@ Urutan halaman: **DB → Barang Masuk → Produksi → Barang Keluar → Laporan
 - Stok Awal Sistem per **Kode Motif**; Laporan Stok tetap dijumlah per **Jenis**. Database versi lama (stok awal per Jenis) dimigrasi otomatis bila Jenis itu hanya punya 1 motif; sisanya disimpan di tabel `opening_lama` dan perlu diisi ulang per Kode Motif (cadangan: `backup/pra-stokawal-*.db`).
 
 ## Link Barang Masuk → Produksi → Barang Keluar (opsional)
-- Form **Produksi** punya kolom opsional "Link Barang Masuk": cari & pilih baris Barang Masuk yang jadi sumbernya.
+- Form **Produksi** punya kolom opsional "Link Barang Masuk": cari & pilih **SSTB** Barang Masuk yang jadi sumbernya. Pencarian hanya berdasarkan nomor SSTB — motif tidak perlu cocok dengan motif produksi (1 SSTB bisa berisi motif A, B, C).
 - Baris **Barang Keluar** punya kolom opsional "Link Produksi": cari & pilih input Produksi yang jadi sumbernya.
 - Keduanya opsional — boleh dikosongkan kalau tidak perlu ditelusuri. Terlihat sebagai kolom "Link" di tabel Produksi/Barang Keluar.
+- Di Barang Masuk, kolom Keterangan Produksi menampilkan progres **per motif** di dalam SSTB itu (Dikerjakan / Sisa), dihitung dari Produksi yang menaut ke SSTB tersebut dengan Kode Motif yang sama. Produksi yang motifnya tidak ada di SSTB ditandai "Motif lain".
+- Import Excel Produksi: kolom Link Barang Masuk cukup diisi nomor SSTB.
+- Data lama (link ke baris barang) dimigrasi otomatis ke SSTB saat aplikasi pertama dijalankan.
+
+## Daftar Barang Masuk / Barang Keluar: 1 SSTB = 1 baris
+- Setiap SSTB hanya tampil **sekali** di daftar; motif A, B, C-nya ditumpuk sejajar dalam baris itu, dengan Total SSTB di bawah kolom Jumlah. Edit / Cetak / Hapus bekerja untuk seluruh SSTB.
+- Pencarian, Filter, Urutkan, Kelompokkan, dan paging menghitung per SSTB (Filter motif = tampilkan SSTB yang memuat motif itu). Export Excel tetap datar (satu baris per barang) agar bisa di-import kembali.
+
+## Restore DB (import database)
+- Tombol **Restore DB** di header: pilih file cadangan `.db` (dari tombol Backup DB atau folder `backup/`). Aplikasi memeriksa file, mencadangkan data saat ini ke `backup/pra-restore-*.db`, lalu mengganti seluruh data dengan isi file itu. Cadangan versi lama dimigrasi otomatis.
+
+## Input Barang Masuk: 1 SSTB banyak motif
+- Satu SSTB = satu sesi: isi SSTB, tanggal, dept, pengrajin sekali, lalu tambah satu baris per motif. Ket baris baru otomatis mengikuti baris sebelumnya.
+- Mengetik nomor SSTB yang sudah ada (lalu Enter / pindah kolom) membuka SSTB itu dan menambahkan baris kosong, jadi motif berikutnya bisa ditambahkan kapan saja tanpa error "SSTB sudah ada".
 
 ## Cetak SSTB
 Tombol **Cetak** pada setiap baris Barang Masuk/Barang Keluar (juga di form Edit SSTB) membuka tampilan cetak Surat Serah Terima Barang: No SSTB, tanggal, dept, daftar No/motif/ket/jumlah/satuan (total dipisah per satuan), dan kolom tanda tangan Yang Menyerahkan / Yang Menerima dengan ruang tanda tangan + nama jelas — lalu otomatis membuka dialog Print browser.

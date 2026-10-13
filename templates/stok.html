@@ -18,6 +18,10 @@
 {% block script %}<script>
 const $f=document.getElementById('f'),$t=document.getElementById('t'),$m=document.getElementById('mode');
 $f.value=$t.value=todayISO();
+const STOK_COLS=['No','Tanggal','Motif','Jenis','Saldo Awal','Masuk','Dari Dept','Keluar','Ke Dept','Saldo Akhir'];
+const stokCT=colToggle('stok',()=>stokCT.apply(document.getElementById('tb')));
+stokCT.setCols(STOK_COLS.map(x=>({n:x,l:x})));
+document.getElementById('xl').before(stokCT.el);
 function shift(n){const d=new Date($f.value+'T00:00:00');d.setDate(d.getDate()+n);
  const s=new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10);$f.value=$t.value=s;run();}
 function motifCell(kode, nama){
@@ -48,7 +52,7 @@ async function run(){
    h('td',{class:'num','data-label':'Keluar'},fmtNum(x.keluar)),
    h('td',{'data-label':'Ke Dept'},x.keluar_dept||''),
    h('td',{class:'num','data-label':'Saldo Akhir'},h('b',{},fmtNum(x.akhir)))));}
- tb.append(body);}
+ tb.append(body);stokCT.apply(tb);}
 document.getElementById('go').onclick=run;
 document.getElementById('prev').onclick=()=>shift(-1);
 document.getElementById('next').onclick=()=>shift(1);

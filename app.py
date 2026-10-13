@@ -92,7 +92,7 @@ SPECS = {
                            C("jenis", "Jenis", "auto", sql="rj.nama", hc="FF0000"),
                            C("link_masuk", "Link Barang Masuk", "linkref", src="masuklink",
                              filtersql="""(SELECT d.sstb FROM dokumen d WHERE d.id=t.link_masuk_id)""",
-                             labelsql="""(SELECT d.sstb||' #'||d.id FROM dokumen d WHERE d.id=t.link_masuk_id)""")]
+                             labelsql="""(SELECT d.sstb FROM dokumen d WHERE d.id=t.link_masuk_id)""")]
                           + [C(c, LABELS[c], "int", cat=1) for c in CATS]
                           + [C("jumlah", "Jumlah", "auto", sql=JUMLAH_EXPR, num=1, hc="FF0000"),
                              C("ket", "Ket", "ref", src="ketprod"), C("catatan", "Catatan")]),
@@ -640,26 +640,35 @@ def search_masuklink(db, q, limit):
             (SELECT COUNT(*) FROM dokumen_item i WHERE i.dokumen_id=d.id) n,
             (SELECT COALESCE(SUM(i.jumlah),0) FROM dokumen_item i WHERE i.dokumen_id=d.id) total
         FROM dokumen d JOIN ref_dept dp ON dp.id=d.dept_id
-        WHERE {' AND '.join(where)} ORDER BY d.tanggal DESC, d.id DESC LIMIT ?""", params + [limit]).fetchall()
-    return [dict(v=f"{r['sstb']} #{r['id']}",
+        WHERE {' AND '.join(where)} ORDER BY (lower(d.sstb)=lower(?)) DESC, d.tanggal DESC, d.id DESC LIMIT ?""",
+        params + [q or "", limit]).fetchall()
+    return [dict(v=r['sstb'],
                 sub=f"{dmy(r['tanggal'])} · {r['dept']} · {r['n']} baris · total {fmt_id(r['total'])}") for r in rows]
 
 def search_produksilink(db, q, limit):
+    """Cari input Produksi untuk Link Produksi (Barang Keluar). Yang ditampilkan: SSTB Barang Masuk asalnya;
+    id disimpan di v (setelah '#') dan tidak ditampilkan (lihat Combo: properti show)."""
     where, params = [], []
     fid = parse_link_id(q) if q else None
     if fid:  # q berupa label lengkap -> cari persis id-nya (validasi link yang sudah tersimpan)
         where.append("p.id=?"); params.append(fid)
     elif q:
-        where.append("(pm.kode_motif LIKE ? OR pm.nama_motif LIKE ? OR kr.nama LIKE ?)")
-        params += [f"%{q}%"] * 3
+        where.append("(d2.sstb LIKE ? OR pm.kode_motif LIKE ? OR pm.nama_motif LIKE ? OR kr.nama LIKE ?)")
+        params += [f"%{q}%"] * 4
     w = ("WHERE " + " AND ".join(where)) if where else ""
-    rows = db.execute(f"""SELECT p.id, p.tgl_produksi, pm.kode_motif, pm.nama_motif, kr.nama nama,
+    rows = db.execute(f"""SELECT p.id, p.tgl_produksi, pm.kode_motif, pm.nama_motif, kr.nama nama, d2.sstb sstb,
             ({jumlah_sql('p')}) jumlah
         FROM produksi p LEFT JOIN ref_motif pm ON pm.id=p.kode_motif_id
         LEFT JOIN ref_karyawan kr ON kr.id=p.nama_id
+        LEFT JOIN dokumen d2 ON d2.id=p.link_masuk_id
         {w} ORDER BY p.tgl_produksi DESC, p.id DESC LIMIT ?""", params + [limit]).fetchall()
-    return [dict(v=f"{r['kode_motif'] or '-'} • {dmy(r['tgl_produksi'])} ({fmt_id(r['jumlah'] or 0)}) #{r['id']}",
-                sub=f"{r['nama_motif'] or ''} · {r['nama'] or ''}") for r in rows]
+    out = []
+    for r in rows:
+        kode = r['kode_motif'] or '-'
+        out.append(dict(v=f"{r['sstb'] or kode} • {dmy(r['tgl_produksi'])} #{r['id']}",
+                        show=r['sstb'] or f"{kode} • {dmy(r['tgl_produksi'])}",
+                        sub=f"{kode} · {dmy(r['tgl_produksi'])} · {fmt_id(r['jumlah'] or 0)} · {r['nama'] or ''}"))
+    return out
 
 @app.get("/api/opt/<src>")
 def api_opt(src):

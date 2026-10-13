@@ -38,7 +38,11 @@ class Combo {
     this.input.addEventListener('keydown', e => this.key(e));
     this.input.addEventListener('blur', () => { this.close(); this.snap(); });
   }
-  get value() { return this.input.value; }
+  disp(o) { return o.show != null ? o.show : o.v; }  // teks yang tampil di kotak (mis. SSTB saja); o.v tetap nilai lengkap yang dikirim
+  get value() {
+    const p = this.picked;
+    return (p && p.show != null && this.input.value === p.show) ? p.v : this.input.value;
+  }
   set value(v) { this.input.value = v == null ? '' : v; this.input.classList.remove('bad'); this.picked = null; }
   focus() { this.input.focus(); }
   isOpen() { return this.list.style.display === 'block'; }
@@ -83,7 +87,7 @@ class Combo {
     this.items.forEach((o, i) => this.list.append(h('div', {
       class: 'combo-item' + (i === this.idx ? ' on' : ''),
       onmousedown: e => { e.preventDefault(); this.pick(o); }
-    }, h('b', {}, o.v), o.sub ? h('span', {}, o.sub) : null)));
+    }, h('b', {}, this.disp(o)), o.sub ? h('span', {}, o.sub) : null)));
     if (!this.items.length) this.list.append(h('div', { class: 'combo-empty' }, 'Tidak ada di master (tambahkan di halaman DB)'));
   }
   close() {
@@ -107,18 +111,22 @@ class Combo {
     } else if (e.key === 'Escape' && open) { e.stopPropagation(); this.close(); }
   }
   pick(o) {
-    this.input.value = o.v; this.typing = false; this.input.classList.remove('bad'); this.picked = o; this.close();
+    this.input.value = this.disp(o); this.typing = false; this.input.classList.remove('bad'); this.picked = o; this.close();
     if (this.o.onPick) this.o.onPick(o);
   }
   async snap() {
     const v = this.input.value.trim();
     if (!v) { this.input.classList.remove('bad'); this.picked = null; if (this.o.onPick) this.o.onPick(null); return null; }
-    if (this.picked && this.picked.v && this.picked.v.toLowerCase() === v.toLowerCase()) {
+    const lv = v.toLowerCase();
+    if (this.picked && this.picked.v && (this.picked.v.toLowerCase() === lv || this.disp(this.picked).toLowerCase() === lv)) {
       this.input.classList.remove('bad'); return this.picked;
     }
     const items = await this.fetchOpts(v);
-    const f = items.find(x => x.v.toLowerCase() === v.toLowerCase());
-    if (f) { this.input.value = f.v; this.picked = f; }
+    let f = items.find(x => x.v.toLowerCase() === lv);
+    const idm = v.match(/#(\d+)\s*$/);  // label tersimpan 'xxx #id' -> cocokkan lewat id
+    if (!f && idm) f = items.find(x => ((x.v.match(/#(\d+)\s*$/) || [])[1]) === idm[1]);
+    if (!f) { const m = items.filter(x => this.disp(x).toLowerCase() === lv); if (m.length === 1) f = m[0]; }  // tampilan ganda = harus dipilih dari daftar
+    if (f) { this.input.value = this.disp(f); this.picked = f; }
     this.input.classList.toggle('bad', !f);
     if (this.o.onPick) this.o.onPick(f || null);
     return f || null;
@@ -217,28 +225,44 @@ function katProdFilter(state, cols, onChange) {
   sel.addEventListener('change', () => { state.kat = sel.value; onChange(); });
   return h('label', { class: 'catfilter' }, 'Kategori', sel);
 }
-/* daftar tabel tercentang: pilih kolom mana yang ditampilkan, disimpan per halaman */
-function colChecklist(storeKey, cols, onChange) {
+/* Tampil/sembunyikan kolom — dipakai SEMUA tabel (DB, Barang Masuk, Produksi + Rekap, Barang Keluar, Laporan Stok).
+   Pilihan disimpan per tabel di browser (localStorage). Kolom "Aksi" selalu tampil. */
+function colToggle(storeKey, onChange) {
   let vis;
   try { vis = JSON.parse(localStorage.getItem('colvis:' + storeKey)) || {}; } catch { vis = {}; }
   const save = () => { try { localStorage.setItem('colvis:' + storeKey, JSON.stringify(vis)); } catch {} };
+  let cols = [];
   const pop = h('div', { class: 'colpop' });
-  for (const c of cols) {
-    const cb = h('input', { type: 'checkbox', checked: vis[c.n] !== false });
-    cb.addEventListener('change', () => { vis[c.n] = cb.checked; save(); onChange(vis); });
-    pop.append(h('label', { class: 'colitem' }, cb, c.l));
-  }
-  const btn = h('button', { type: 'button', class: 'btn', title: 'Pilih kolom yang ditampilkan' }, 'Kolom ▾');
+  const btn = h('button', { type: 'button', class: 'btn', title: 'Tampilkan / sembunyikan kolom' }, 'Kolom ▾');
+  const label = () => {
+    const hid = cols.filter(c => vis[c.n] === false).length;
+    btn.textContent = hid ? `Kolom (${hid} disembunyikan) ▾` : 'Kolom ▾';
+  };
+  const setCols = list => {
+    cols = list; pop.innerHTML = '';
+    pop.append(h('div', { class: 'colpop-act' },
+      h('button', { type: 'button', class: 'btn sm', onclick: () => {
+        for (const c of cols) delete vis[c.n];
+        save(); setCols(cols); onChange(vis);
+      } }, 'Tampilkan semua')));
+    for (const c of cols) {
+      const cb = h('input', { type: 'checkbox', checked: vis[c.n] !== false });
+      cb.addEventListener('change', () => { vis[c.n] = cb.checked; save(); label(); onChange(vis); });
+      pop.append(h('label', { class: 'colitem' }, cb, c.l));
+    }
+    label();
+  };
   btn.addEventListener('click', e => { e.stopPropagation(); pop.classList.toggle('open'); });
   document.addEventListener('click', e => { if (!pop.contains(e.target) && e.target !== btn) pop.classList.remove('open'); });
-  queueMicrotask(() => onChange(vis));
-  return { el: h('div', { class: 'colcheck' }, btn, pop), vis };
-}
-function applyColVis(theadRow, tbody, cols, vis) {
-  [...theadRow.children].forEach((th, i) => { if (i < cols.length) th.style.display = vis[cols[i].n] === false ? 'none' : ''; });
-  [...tbody.children].forEach(tr => {
-    [...tr.children].forEach((td, i) => { if (i < cols.length) td.style.display = vis[cols[i].n] === false ? 'none' : ''; });
-  });
+  /* terapkan ke tabel: sel ke-i = kolom ke-i; baris judul kelompok / "belum ada data" dilewati */
+  const apply = table => {
+    if (!table) return;
+    table.querySelectorAll('tr').forEach(tr => {
+      if (tr.classList.contains('grouphead') || tr.querySelector('td.empty')) return;
+      [...tr.children].forEach((c, i) => { if (i < cols.length) c.style.display = vis[cols[i].n] === false ? 'none' : ''; });
+    });
+  };
+  return { el: h('div', { class: 'colcheck' }, btn, pop), vis, setCols, apply };
 }
 
 /* judul kolom tabel: teks, klik = urutkan asc/desc (tabel master DB saja; halaman lain pakai panel Filter) */
@@ -470,6 +494,7 @@ class Crud {
       const fi = buildFilterToolbarItem(this, this.o.filterPanel);
       tb.append(fi.btn, ...io.els);
       this.chipsRow = fi.chipsRow;
+      this.ct = colToggle(this.key, () => this.applyVis()); this.ct.setCols(m.cols); tb.append(this.ct.el);
     } else {
       tb.append(searchBox(this.qstate, () => { this.page = 1; this.load(); }));
       if (this.key === 'opening_prod') tb.append(katProdFilter(this.catstate, m.cols.filter(c => c.cat), () => { this.page = 1; this.load(); }));
@@ -477,8 +502,7 @@ class Crud {
       tb.append(h('span', { class: 'grow' }));
       const io = ioTools(this.key, () => { this.load(); if (this.o.onChange) this.o.onChange(); }, this.notify, this.impBox);
       this.exp = io.exp; tb.append(...io.els);
-      const cc = colChecklist(this.key, m.cols, vis => { this.colvis = vis; this.applyVis(); });
-      tb.append(cc.el);
+      this.ct = colToggle(this.key, () => this.applyVis()); this.ct.setCols(m.cols); tb.append(this.ct.el);
     }
     this.thead = h('thead'); this.theadRow = h('tr'); this.thead.append(this.theadRow); this.tbody = h('tbody');
     this.table = h('table', { class: 'resp' }, this.thead, this.tbody);
@@ -500,7 +524,7 @@ class Crud {
     }));
     this.theadRow.append(h('th', {}, 'Aksi'));
   }
-  applyVis() { if (this.colvis) applyColVis(this.theadRow, this.tbody, this.meta.cols, this.colvis); }
+  applyVis() { if (this.ct) this.ct.apply(this.table); }
   params(extra) {
     const p = new URLSearchParams(extra || {});
     for (const [k, v] of Object.entries(this.range)) if (v) p.set(k, v);
@@ -672,6 +696,8 @@ class DocPage {
       h('span', { class: 'grow' }));
     const io = ioTools(this.arah, () => this.load(), this.notify, this.impBox, true);
     this.exp = io.exp; tb.append(...io.els);
+    this.ct = colToggle('doc-' + this.arah, () => this.applyVis());
+    this.ct.setCols(this.cols.map(([n, l]) => ({ n, l }))); tb.append(this.ct.el);
     this.theadRow = h('tr');
     for (const [n, l, k] of this.cols) this.theadRow.append(h('th', { class: k === 'int' ? 'num' : '' }, l));
     this.theadRow.append(h('th', {}, 'Aksi'));
@@ -680,6 +706,7 @@ class DocPage {
     this.root.append(tb, this.chipsRow, this.chips, this.msg, this.impBox,
       h('div', { class: 'tablewrap' }, this.table), this.pager);
   }
+  applyVis() { if (this.ct) this.ct.apply(this.table); }
   params(extra) {
     const p = new URLSearchParams(extra || {});
     for (const [k, v] of Object.entries(this.range)) if (v) p.set(k, v);
@@ -760,6 +787,7 @@ class DocPage {
     this.tbody = this.table.querySelector('tbody');
     pagerInto(this.pager, this.page, r.pages, r.total, '', p => { this.page = p; this.load(); },
       this.size, n => { this.size = n; this.page = 1; this.load(); }, 'SSTB');
+    this.applyVis();
   }
   async printRow(row) {
     const d = await (await fetch(`/api/doc/${this.arah}/${row.doc_id}`)).json();

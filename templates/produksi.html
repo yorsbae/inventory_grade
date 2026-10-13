@@ -23,6 +23,8 @@ $t.value=todayISO();$f.value=defaultFrom();
 const INIT={{ init|tojson }};
 if(INIT.pid){$f.value=INIT.tanggal;if($t.value<INIT.tanggal)$t.value=INIT.tanggal;}
 const range={from:$f.value,to:$t.value};
+const rekapCT=colToggle('rekap',()=>rekapCT.apply(document.getElementById('tb')));
+document.getElementById('xl').before(rekapCT.el);
 if(INIT.pid)range.id=INIT.pid;
 const crud=new Crud(document.getElementById('listView'),'produksi',{hideAdd:true,noRange:true,range,onChange:()=>run(),
  filterPanel:{
@@ -50,12 +52,14 @@ async function run(){
   h('td',{},$b.value==='tanggal'&&!x.total&&!x.awal?fmtDate(x.grp):x.grp),h('td',{class:'num'},fmtNum(x.baris)),
   r.cats.map(c=>h('td',{class:'num'},fmtNum(x[c]))),h('td',{class:'num'},h('b',{},fmtNum(x.jumlah)))));}
  tb.append(body);
+ rekapCT.setCols([{n:'grp',l:r.label},{n:'baris',l:'Baris'}].concat(r.cats.map(c=>({n:c,l:(r.labels&&r.labels[c])||c})),[{n:'jumlah',l:'Jumlah'}]));
+ rekapCT.apply(tb);
  const tot=r.rows.find(x=>x.total&&!x.saldo);const ch=document.getElementById('chips');ch.innerHTML='';
  if(tot)ch.append(h('span',{class:'chip'},h('b',{},tot.baris.toLocaleString('id-ID')),' input'),
   h('span',{class:'chip big'},'Total produksi ',h('b',{},(tot.jumlah||0).toLocaleString('id-ID'))));}
 function clearPid(){delete range.id;document.getElementById('pidnote').style.display='none';}
 function showPid(){const n=document.getElementById('pidnote');n.innerHTML='';n.style.display='';
- n.append(h('span',{class:'chip'},'Menampilkan 1 input produksi (#'+INIT.pid+') '),
+ n.append(h('span',{class:'chip'},'Menampilkan 1 input produksi '),
   h('button',{class:'btn sm',onclick:()=>{clearPid();crud.ready.then(()=>{crud.page=1;crud.load();});}},'Tampilkan semua'));}
 function setRange(){if(range.id)clearPid();if(!$f.value)$f.value=defaultFrom();if(!$t.value)$t.value=todayISO();
  if($f.value>$t.value){if(document.activeElement===$f)$t.value=$f.value;else $f.value=$t.value;}
@@ -66,7 +70,8 @@ document.querySelectorAll('#seg button').forEach(b=>b.onclick=()=>{
  document.getElementById('rekapView').style.display=v==='rekap'?'':'none';
  document.getElementById('listView').style.display=v==='daftar'?'':'none';
  document.getElementById('byw').style.display=v==='rekap'?'':'none';
- document.getElementById('xl').style.display=v==='rekap'?'':'none';});
+ document.getElementById('xl').style.display=v==='rekap'?'':'none';
+ rekapCT.el.style.display=v==='rekap'?'':'none';});
 document.getElementById('add').onclick=()=>crud.ready.then(()=>crud.openForm());
 run();
 if(INIT.pid){showPid();document.querySelector('#seg button[data-v=daftar]').click();}

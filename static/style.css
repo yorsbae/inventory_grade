@@ -53,6 +53,7 @@ tbody tr:nth-child(even){background:#f8fafd}tbody tr:hover{background:#eaf1fd}
 td.num{text-align:right;font-variant-numeric:tabular-nums}td.c{text-align:center}
 th.num{text-align:right}th.c{text-align:center}
 tr.total td{font-weight:700;background:#dbe5f5!important;border-top:2px solid #3b5f95}
+tr.docrow td{padding:6px 8px}
 td.empty{text-align:center;color:#6b7280;padding:28px;white-space:normal}
 .pager{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:10px;color:#4b5563}
 .pager select.pgsize{width:auto;padding:3px 8px;font-size:12px}
@@ -64,6 +65,9 @@ td.empty{text-align:center;color:#6b7280;padding:28px;white-space:normal}
 .colpop.open{display:block}
 .colitem{flex-direction:row!important;align-items:center;gap:8px!important;padding:5px 10px;font-size:13px;color:#1f2937;cursor:pointer}
 .colitem input{width:auto}
+.colpop-act{padding:2px 10px 6px;border-bottom:1px solid #e8ecf3;margin-bottom:4px}
+.colpop-act .btn{width:100%}
+.colpop .colitem:hover{background:#eef2f8}
 .tabs{display:flex;gap:4px;margin-bottom:8px;overflow-x:auto;white-space:nowrap}
 .tabs button{padding:8px 14px;border:1px solid #c5ccd8;background:#fff;border-radius:8px 8px 0 0;cursor:pointer;font:inherit}
 .tabs button.on{background:#3b5f95;color:#fff;border-color:#3b5f95}
@@ -89,8 +93,10 @@ td.empty{text-align:center;color:#6b7280;padding:28px;white-space:normal}
 .modal-f{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;padding:12px 20px;border-top:1px solid #e5e9f2;background:#fafbfe;border-radius:0 0 14px 14px}
 /* baris barang */
 .irow>*{min-width:0}
-.irow{display:grid;grid-template-columns:170px minmax(140px,1.4fr) minmax(170px,1.2fr) 80px 110px 84px 36px;gap:8px;align-items:start;padding:8px 0;border-bottom:1px dashed #e0e5ef}
-.irow.has-link{grid-template-columns:160px minmax(130px,1.1fr) minmax(140px,.9fr) 70px 90px 84px minmax(170px,1.2fr) 36px}
+/* jumlah kolom grid = jumlah isi baris (Kode Motif, Motif·Jenis, Ket, Rumus, Jumlah, [Link Produksi], ×) */
+.irow{display:grid;grid-template-columns:170px minmax(140px,1.4fr) minmax(170px,1.2fr) 70px 110px 36px;gap:8px;align-items:start;padding:8px 0;border-bottom:1px dashed #e0e5ef}
+.irow.has-link{grid-template-columns:160px minmax(130px,1fr) minmax(140px,.9fr) 64px 90px minmax(190px,1.3fr) 36px}
+.irow .rm{padding:7px 0;width:36px;justify-self:end}
 .ihead{font-size:12px;color:#6b7280;font-weight:600;padding-bottom:4px}
 .cell small{display:none;color:#6b7280;font-size:11px;margin-bottom:2px}
 .info{font-size:13px;padding-top:9px;min-height:20px}.stock{font-size:12px;color:#166534}.stock.low{color:#b91c1c;font-weight:600}

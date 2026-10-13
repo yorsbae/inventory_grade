@@ -1019,7 +1019,7 @@ def api_doc_get(name, doc_id):
         WHERE d.id=? AND d.arah=?""", (doc_id, arah)).fetchone()
     if not d:
         abort(404)
-    items = db.execute(f"""SELECT m.kode_motif, k.nama ket, i.jumlah,
+    items = db.execute(f"""SELECT m.kode_motif, m.nama_motif, k.nama ket, i.jumlah,
             {LINK_PRODUKSI_LABEL_SQL} AS link_produksi
         FROM dokumen_item i JOIN ref_motif m ON m.id=i.motif_id JOIN ref_ket k ON k.id=i.ket_id
         WHERE i.dokumen_id=? ORDER BY i.id""", (doc_id,)).fetchall()

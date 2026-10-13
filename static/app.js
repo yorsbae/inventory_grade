@@ -271,53 +271,52 @@ function thCell(label, opts) {
   const lab = h('span', { class: 'th-label', onclick: onSort }, label, sortOn ? h('i', { class: 'th-sort' }, sortOn === 'asc' ? ' \u25B2' : ' \u25BC') : null);
   return h('th', { class: align || '' }, h('span', { class: 'th-wrap' }, lab));
 }
-/* cetak SSTB dengan tata letak seperti formulir kertas Surat Serah Terima Barang */
-function printSSTB(doc, label) {
+/* cetak SSTB: judul, keterangan (No SSTB, Tanggal, Dari, Ke), daftar barang (No, Motif, Satuan, Jumlah) dan tanda tangan
+   (Yang Menyerahkan / Yang Menerima) semuanya dalam SATU tabel.
+   Keluar: Dari GRADE PACK -> Keluar ke <dept>. Masuk: Dari <dept> -> Masuk ke GRADE PACK. */
+const GRADE_PACK = 'GRADE PACK', SATUAN_CETAK = 'PCS';
+function printSSTB(doc, label, arah) {
+  const keluar = arah ? arah === 'keluar' : /keluar/i.test(label || '');
   const items = doc.items || [];
-  const hasLink = items.some(it => it.link_produksi);  // kolom ke-4 hanya ada kalau benar2 dipakai
-  const rows = items.map(it => `<tr><td>${esc(it.kode_motif)}</td><td>${esc(it.ket || '')}</td>
-    <td class="num">${fmtNum(it.jumlah)}</td>${hasLink ? `<td>${esc(it.link_produksi ? it.link_produksi.replace(/#\d+$/, '').trim() : '')}</td>` : ''}</tr>`).join('');
+  const dari = keluar ? GRADE_PACK : (doc.dept || '-'), ke = keluar ? (doc.dept || '-') : GRADE_PACK;
+  const rows = items.map((it, i) => `<tr><td class="c">${i + 1}.</td>
+    <td>${esc(it.kode_motif)}${it.nama_motif ? ' &ndash; ' + esc(it.nama_motif) : ''}</td>
+    <td class="c">${esc(SATUAN_CETAK)}</td><td class="num">${fmtNum(it.jumlah)}</td></tr>`).join('');
   const total = items.reduce((s, it) => s + (parseInt(it.jumlah) || 0), 0);
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>SSTB ${esc(doc.sstb)}</title>
 <style>
-/* Kertas A4 potret, tapi isi cetakan hanya mengisi separuh atas halaman */
+/* Kertas A4 potret; satu tabel saja, tinggi menyesuaikan jumlah barang supaya data tidak terpotong */
 @page{size:A4 portrait;margin:0}
 *{box-sizing:border-box;font-family:Arial,Helvetica,sans-serif}
 html,body{margin:0;color:#111;background:#ccc}
 .sheet{width:210mm;min-height:148.5mm;margin:0 auto;padding:14mm 16mm;background:#fff}
-/* catatan: tinggi dibiarkan menyesuaikan kalau barang sangat banyak, supaya data tidak pernah terpotong */
-h1{font-size:15px;text-align:center;margin:0 0 2px;text-transform:uppercase;letter-spacing:.5px}
-h2{font-size:11.5px;text-align:center;margin:0 0 10px;font-weight:normal;color:#444}
-.hdr{display:flex;justify-content:space-between;gap:10px;margin-bottom:10px;font-size:11px;border:1px solid #333;padding:7px 10px}
-.hdr div{line-height:1.6;min-width:0}
-.hdr b{display:inline-block;min-width:60px}
-table{width:100%;table-layout:fixed;border-collapse:collapse;font-size:11px;margin-bottom:6px}
-th,td{border:1px solid #333;padding:4px 6px;vertical-align:top;overflow-wrap:break-word;word-break:break-word}
-th{background:#eee;text-align:left}
-td.num,th.num{text-align:right}
-tfoot td{font-weight:bold;background:#f7f7f7}
-.sig{display:flex;justify-content:space-between;margin-top:22px;font-size:11px}
-.sig div{width:45%;text-align:center}
-.sig .line{margin-top:28px;border-top:1px solid #333;padding-top:4px}
+table{width:100%;table-layout:fixed;border-collapse:collapse;font-size:12px}
+th,td{border:1px solid #222;padding:5px 8px;vertical-align:top;overflow-wrap:break-word;word-break:break-word}
+td.title{text-align:center;font-size:15px;font-weight:bold;text-transform:uppercase;letter-spacing:.5px;padding:9px 8px}
+td.title small{display:block;font-size:11.5px;font-weight:normal;letter-spacing:0;text-transform:none;color:#444;margin-top:2px}
+th{background:#eee;text-align:center}
+td.c{text-align:center}td.num{text-align:right}
+td.info b{display:inline-block;min-width:62px}
+tr.total td{font-weight:bold;background:#f5f5f5}
+td.sig{height:34mm;text-align:center;vertical-align:top;padding-top:6px}
+td.sig span{display:block;margin-top:24mm;border-top:1px solid #222;padding-top:3px;font-size:11px}
 .foot{margin-top:6px;font-size:9px;color:#777;text-align:right}
 @media print{html,body{background:#fff}.sheet{margin:0;box-shadow:none}}
 @media screen{body{padding:10mm 0}.sheet{box-shadow:0 2px 10px rgba(0,0,0,.25)}}
 </style></head><body>
 <div class="sheet">
-<h1>Surat Serah Terima Barang</h1>
-<h2>${esc(label)}</h2>
-<div class="hdr">
-  <div><b>No SSTB</b> ${esc(doc.sstb)}<br><b>Dept</b> ${esc(doc.dept || '-')}</div>
-  <div style="text-align:right"><b>Tanggal</b> ${fmtDate(doc.tanggal)}<br><b>Pengrajin</b> ${esc(doc.pengrajin || '-')}</div>
-</div>
-<table><thead><tr><th>Motif</th><th>Ket</th><th class="num">Jumlah</th>${hasLink ? '<th>Sumber Produksi</th>' : ''}</tr></thead>
-<tbody>${rows}</tbody>
-<tfoot><tr><td colspan="2">TOTAL</td><td class="num">${fmtNum(total)}</td>${hasLink ? '<td></td>' : ''}</tr></tfoot>
-</table>
-<div class="sig">
-  <div>Yang Menyerahkan<div class="line">&nbsp;</div></div>
-  <div>Yang Menerima<div class="line">&nbsp;</div></div>
-</div>
+<table>
+<colgroup><col style="width:9%"><col><col style="width:16%"><col style="width:17%"></colgroup>
+<tbody>
+<tr><td class="title" colspan="4">Surat Serah Terima Barang<small>${esc(label)}</small></td></tr>
+<tr><td class="info" colspan="2"><b>No SSTB</b>: ${esc(doc.sstb)}</td><td class="info" colspan="2"><b>Tanggal</b>: ${fmtDate(doc.tanggal)}</td></tr>
+<tr><td class="info" colspan="2"><b>Dari</b>: ${esc(dari)}</td><td class="info" colspan="2"><b>${keluar ? 'Keluar ke' : 'Masuk ke'}</b>: ${esc(ke)}</td></tr>
+${doc.pengrajin ? `<tr><td class="info" colspan="4"><b>Pengrajin</b>: ${esc(doc.pengrajin)}</td></tr>` : ''}
+<tr><th>No</th><th>Motif</th><th>Satuan</th><th>Jumlah</th></tr>
+${rows}
+<tr class="total"><td colspan="3">TOTAL</td><td class="num">${fmtNum(total)}</td></tr>
+<tr><td class="sig" colspan="2">Yang Menyerahkan<span>&nbsp;</span></td><td class="sig" colspan="2">Yang Menerima<span>&nbsp;</span></td></tr>
+</tbody></table>
 <div class="foot">Dicetak ${fmtDate(todayISO())} dari Stok Grade</div>
 </div>
 <script>window.onload=()=>setTimeout(()=>window.print(),250)</script>
@@ -791,7 +790,7 @@ class DocPage {
   }
   async printRow(row) {
     const d = await (await fetch(`/api/doc/${this.arah}/${row.doc_id}`)).json();
-    printSSTB(d, this.label);
+    printSSTB(d, this.label, this.arah);
   }
   async delDoc(row) {
     if (!confirm(`Hapus seluruh SSTB ${row.sstb} beserta ${row.items.length} baris barangnya?`)) return;
@@ -901,7 +900,7 @@ class DocPage {
         if (!confirm(`Hapus seluruh SSTB ${doc.sstb} beserta semua barisnya?`)) return;
         await fetch(`/api/doc/${this.arah}/${docId}`, { method: 'DELETE' }); modal.close(); this.load();
       } }, 'Hapus SSTB'));
-      foot.push(h('button', { class: 'btn', onclick: () => printSSTB(doc, this.label) }, 'Cetak SSTB'));
+      foot.push(h('button', { class: 'btn', onclick: () => printSSTB(doc, this.label, this.arah) }, 'Cetak SSTB'));
     }
     foot.push(h('button', { class: 'btn', onclick: () => modal.close() }, 'Batal'));
     if (!docId) foot.push(h('button', { class: 'btn', onclick: () => send(true) }, 'Simpan & Tambah Lagi'));

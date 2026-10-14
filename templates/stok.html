@@ -1,13 +1,10 @@
 {% extends "base.html" %}
 {% block body %}
 <div class="toolbar">
- <button class="btn" id="prev">&#9664; Sebelumnya</button>
- <label>Dari <input type="date" id="f"></label>
- <label>Sampai <input type="date" id="t"></label>
+ <span id="pslot" style="display:contents"></span>
  <label>Tampilan <select id="mode"><option value="ringkas">Ringkas (per motif)</option>
   <option value="harian">Per hari (rantai saldo)</option></select></label>
  <button class="btn primary" id="go">Tampilkan</button>
- <button class="btn" id="next">Berikutnya &#9654;</button>
  <span class="grow"></span>
  <a class="btn" id="xl">Export Excel</a>
 </div>
@@ -16,21 +13,21 @@
 <div class="tablewrap"><table id="tb" class="resp"></table></div>
 {% endblock %}
 {% block script %}<script>
-const $f=document.getElementById('f'),$t=document.getElementById('t'),$m=document.getElementById('mode');
-$f.value=$t.value=todayISO();
+const $m=document.getElementById('mode');
+const range={from:todayISO(),to:todayISO()};   // periode: default hari ini
+const picker=periodPicker(range,()=>run());
+document.getElementById('pslot').append(...picker.els);
 const STOK_COLS=['No','Tanggal','Motif','Jenis','Saldo Awal','Masuk','Dari Dept','Keluar','Ke Dept','Saldo Akhir'];
 const stokCT=colToggle('stok',()=>stokCT.apply(document.getElementById('tb')));
 stokCT.setCols(STOK_COLS.map(x=>({n:x,l:x})));
 document.getElementById('xl').before(stokCT.el);
-function shift(n){const d=new Date($f.value+'T00:00:00');d.setDate(d.getDate()+n);
- const s=new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10);$f.value=$t.value=s;run();}
 function motifCell(kode, nama){
  return h('div',{},h('b',{},kode||'-'), nama ? h('small',{class:'deptbrk'},nama) : null);
 }
 function tglLabel(x){return !x.tanggal?'':(!x.tanggal_sd||x.tanggal_sd===x.tanggal)?fmtDate(x.tanggal):fmtDate(x.tanggal)+' s/d '+fmtDate(x.tanggal_sd);}
 async function run(){
  const harian=$m.value==='harian';
- const q=new URLSearchParams({from:$f.value,to:$t.value||$f.value,mode:$m.value});
+ const q=new URLSearchParams({from:range.from,to:range.to,mode:$m.value});
  document.getElementById('xl').href='/export/stok?'+q;
  const r=await (await fetch('/api/stok?'+q)).json();
  const tb=document.getElementById('tb');tb.innerHTML='';
@@ -54,7 +51,5 @@ async function run(){
    h('td',{class:'num','data-label':'Saldo Akhir'},h('b',{},fmtNum(x.akhir)))));}
  tb.append(body);stokCT.apply(tb);}
 document.getElementById('go').onclick=run;
-document.getElementById('prev').onclick=()=>shift(-1);
-document.getElementById('next').onclick=()=>shift(1);
 $m.onchange=run;run();
 </script>{% endblock %}

@@ -641,7 +641,7 @@ def ref_lookup(db, src, val):
     return db.execute(f"SELECT * FROM {tbl} WHERE lower({col})=lower(?)", (str(val),)).fetchone()
 
 PAGE_DEFAULT, PAGE_MAX = 25, 100   # baris per halaman (agar tabel tidak berat)
-DEFAULT_DAYS = 7                   # rentang tanggal bawaan bila tidak dikirim
+DEFAULT_DAYS = 1                   # rentang tanggal bawaan bila tidak dikirim (1 = hari ini)
 
 def default_from():
     return (dt.date.today() - dt.timedelta(days=DEFAULT_DAYS - 1)).isoformat()

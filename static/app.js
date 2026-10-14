@@ -26,7 +26,7 @@ const fmtNum = v => (v == null || v === 0) ? '-' : Number(v).toLocaleString('id-
 const fmtDate = v => { if (!v) return ''; const p = v.split('-'); return p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : v; };
 const todayISO = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 const monthStart = () => todayISO().slice(0, 8) + '01';
-const DEFAULT_DAYS = 7, PAGE_SIZES = [25, 50, 100];
+const DEFAULT_DAYS = 1, PAGE_SIZES = [25, 50, 100];
 const daysAgo = n => new Date(Date.now() - new Date().getTimezoneOffset() * 60000 - n * 864e5).toISOString().slice(0, 10);
 const defaultFrom = () => daysAgo(DEFAULT_DAYS - 1);
 const J = (method, body) => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -206,17 +206,68 @@ function pagerInto(el, page, pages, total, extra, go, size, onSize, unit) {
     h('button', { class: 'btn sm', disabled: page >= pages, onclick: () => go(page + 1) }, 'Next ›'),
     sel, `· ${from.toLocaleString('id-ID')}–${to.toLocaleString('id-ID')} dari ${total.toLocaleString('id-ID')} ${unit || 'baris'}`, extra || '');
 }
-function rangeInputs(range, onChange) {
-  const a = h('input', { type: 'date', value: range.from || '' }), b = h('input', { type: 'date', value: range.to || '' });
-  const ch = () => {  // tanggal tidak boleh kosong: kosong = semua data = lemot
-    if (!a.value) a.value = defaultFrom();
-    if (!b.value) b.value = todayISO();
-    if (a.value > b.value) { if (document.activeElement === a) b.value = a.value; else a.value = b.value; }
-    range.from = a.value; range.to = b.value; onChange();
+/* ===== Periode: Harian / Bulanan / Rentang tanggal (tgl x s/d y), default hari ini. Dipakai SEMUA halaman. =====
+   Mengisi range.from & range.to (YYYY-MM-DD); onChange dipanggil setelah periode berubah. Tombol ‹ › menggeser satu periode. */
+const ymd = d => d.toISOString().slice(0, 10);                       // d = Date UTC
+const parseYmd = v => new Date(v + 'T00:00:00Z');
+const addDays = (v, n) => { const d = parseYmd(v); d.setUTCDate(d.getUTCDate() + n); return ymd(d); };
+const monthRange = ym => {                                            // 'YYYY-MM' -> [awal, akhir bulan]
+  const [y, m] = ym.split('-').map(Number);
+  return [ym + '-01', ym + '-' + String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, '0')];
+};
+const addMonths = (ym, n) => { const [y, m] = ym.split('-').map(Number); const d = new Date(Date.UTC(y, m - 1 + n, 1)); return ymd(d).slice(0, 7); };
+function periodPicker(range, onChange) {
+  const sel = h('select', { title: 'Periode' }, [['harian', 'Harian'], ['bulanan', 'Bulanan'], ['rentang', 'Rentang tanggal']]
+    .map(([v, l]) => h('option', { value: v }, l)));
+  const day = h('input', { type: 'date' }), a = h('input', { type: 'date' }), b = h('input', { type: 'date' }), mon = h('input', { type: 'month' });
+  const L = (t, el) => h('label', {}, t, el);
+  const lDay = L('Tanggal', day), lMon = L('Bulan', mon), lA = L('Dari tgl', a), lB = L('Sampai tgl', b);
+  const prev = h('button', { type: 'button', class: 'btn', title: 'Periode sebelumnya' }, '‹');
+  const next = h('button', { type: 'button', class: 'btn', title: 'Periode berikutnya' }, '›');
+  const today = h('button', { type: 'button', class: 'btn', title: 'Kembali ke hari ini' }, 'Hari ini');
+  const fill = () => {   // tampilkan kontrol sesuai mode & isi dari range
+    const m = sel.value;
+    lDay.style.display = m === 'harian' ? '' : 'none'; lMon.style.display = m === 'bulanan' ? '' : 'none';
+    lA.style.display = lB.style.display = m === 'rentang' ? '' : 'none';
+    day.value = range.from; mon.value = range.from.slice(0, 7); a.value = range.from; b.value = range.to;
   };
-  a.onchange = b.onchange = ch;
-  return [h('label', {}, 'Dari', a), h('label', {}, 'Sampai', b)];
+  const fire = () => { fill(); onChange(); };
+  const setMode = () => {   // ganti mode: pertahankan tanggal awal sebagai acuan
+    const f = range.from;
+    if (sel.value === 'harian') range.to = f;
+    else if (sel.value === 'bulanan') [range.from, range.to] = monthRange(f.slice(0, 7));
+    else if (range.to < f) range.to = f;
+    fire();
+  };
+  sel.onchange = setMode;
+  day.onchange = () => { if (!day.value) return fill(); range.from = range.to = day.value; fire(); };
+  mon.onchange = () => { if (!mon.value) return fill(); [range.from, range.to] = monthRange(mon.value); fire(); };
+  const rg = () => {   // tanggal tidak boleh kosong; bila terbalik, sisi lain ikut
+    if (!a.value) a.value = range.from; if (!b.value) b.value = range.to;
+    if (a.value > b.value) { if (document.activeElement === a) b.value = a.value; else a.value = b.value; }
+    range.from = a.value; range.to = b.value; fire();
+  };
+  a.onchange = b.onchange = rg;
+  const shift = n => {
+    if (sel.value === 'harian') range.from = range.to = addDays(range.from, n);
+    else if (sel.value === 'bulanan') [range.from, range.to] = monthRange(addMonths(range.from.slice(0, 7), n));
+    else { const len = Math.round((parseYmd(range.to) - parseYmd(range.from)) / 864e5) + 1; range.from = addDays(range.from, n * len); range.to = addDays(range.to, n * len); }
+    fire();
+  };
+  prev.onclick = () => shift(-1); next.onclick = () => shift(1);
+  today.onclick = () => { const t = todayISO(); sel.value = 'harian'; range.from = range.to = t; fire(); };
+  /* mode awal dari range: 1 hari = Harian, selain itu Rentang (mis. dibuka dari hyperlink SSTB) */
+  if (!range.from) range.from = todayISO();
+  if (!range.to) range.to = range.from;
+  sel.value = range.from === range.to ? 'harian' : 'rentang';
+  fill();
+  return {
+    els: [L('Periode', sel), lDay, lMon, lA, lB, h('div', { class: 'pbtns' }, prev, next, today)],
+    set(from, to) { range.from = from; range.to = to || from; sel.value = range.from === range.to ? 'harian' : 'rentang'; fill(); },
+    shift
+  };
 }
+function rangeInputs(range, onChange) { return periodPicker(range, onChange).els; }
 /* kotak pencarian: filter server-side (bukan filter di browser) supaya data yang dimuat tetap sedikit */
 function searchBox(state, onChange, placeholder) {
   const inp = h('input', { type: 'search', placeholder: placeholder || 'Cari…', value: state.q || '' });
@@ -955,7 +1006,7 @@ function viewDropdown(items, onPick, initial) {
 /* Stok Pengrajin (halaman Barang Keluar): total dikirim ke pengrajin - total kembali (Barang Masuk), per Motif & Ket */
 class PengrajinStok {
   constructor(root) {
-    this.root = root; this.st = { to: todayISO(), q: '', pengrajin: '', all: false }; this.build(); this.load();
+    this.root = root; this.st = { to: todayISO(), q: '', pengrajin: '', all: false }; this.range = { from: todayISO(), to: todayISO() }; this.build(); this.load();
   }
   params() {
     const p = new URLSearchParams({ to: this.st.to });
@@ -966,8 +1017,7 @@ class PengrajinStok {
   }
   build() {
     const st = this.st;
-    const to = h('input', { type: 'date', value: st.to });
-    to.onchange = () => { st.to = to.value || todayISO(); this.load(); };
+    const pk = periodPicker(this.range, () => { st.to = this.range.to; this.load(); });   // stok dihitung s/d akhir periode
     const q = h('input', { type: 'search', placeholder: 'Cari pengrajin, motif, ket…' });
     let t; q.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => { st.q = q.value.trim(); this.load(); }, 300); });
     const sel = h('select', {}, h('option', { value: '' }, 'Semua Pengrajin'));
@@ -979,11 +1029,11 @@ class PengrajinStok {
     this.table = h('table', { class: 'resp' });
     this.chips = h('div', { class: 'chips' });
     this.root.append(
-      h('div', { class: 'toolbar' }, h('label', {}, 'Per tanggal', to), h('label', {}, 'Pengrajin', sel),
+      h('div', { class: 'toolbar' }, ...pk.els, h('label', {}, 'Pengrajin', sel),
         h('label', { class: 'searchbox' }, 'Cari', q),
         h('label', { class: 'colitem' }, all, 'Tampilkan stok 0'), h('span', { class: 'grow' }), this.exp),
       h('p', { class: 'hint' }, 'Stok Pengrajin = jumlah Barang Keluar ke pengrajin itu dikurangi Barang Masuk darinya, per Motif dan Ket ' +
-        '(dihitung dari seluruh transaksi s/d tanggal di atas). Contoh: keluar 600, masuk 500 → stok di pengrajin 100. ' +
+        '(dihitung dari seluruh transaksi s/d tanggal akhir periode di atas, default hari ini). Contoh: keluar 600, masuk 500 → stok di pengrajin 100. ' +
         'Bila Ket saat kembali berbeda dari Ket saat dikirim (mis. Belum Neci → Sudah Neci), atur di DB › Pemetaan Keluar → Masuk. ' +
         'Barang Keluar/Masuk tanpa Nama Pengrajin tidak ikut dihitung.'),
       this.chips, h('div', { class: 'tablewrap' }, this.table));

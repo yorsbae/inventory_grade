@@ -163,3 +163,7 @@ td.dl{line-height:26px;font-weight:600}
 .ddmenu button:hover{background:#eef2f8}.ddmenu button.on{background:#e8f0fe;font-weight:600}
 td.neg,td.neg b{color:#b91c1c}
 td small.pk{display:block;font-size:11px;color:#6b7280;font-weight:400}
+
+/* periode */
+.pbtns{display:flex;gap:4px;align-items:flex-end}
+.pbtns .btn{padding:8px 12px}

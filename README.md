@@ -20,7 +20,7 @@ Urutan halaman: **DB → Barang Masuk → Produksi → Barang Keluar → Laporan
 
 ## Performa & pencarian (v1.1)
 - Kolom pilihan (Motif, Karyawan, Dept, Ket, dst) tidak lagi memuat semua data sekaligus: mengetik "de" mencari ke server dan hanya menampilkan hasil yang cocok (mis. Dedi, Devi, Dekin), maksimal 50 hasil. Ini berlaku di semua form input.
-- Produksi, Barang Masuk, dan Barang Keluar hanya menampilkan **7 hari terakhir**, **25 baris per halaman** (pilihan 25/50/100). Ubah rentang tanggal untuk melihat data lama; tanggal tidak bisa dikosongkan.
+- Produksi, Barang Masuk, dan Barang Keluar hanya menampilkan **periode terpilih (default hari ini)**, **25 baris per halaman** (pilihan 25/50/100). Ubah Periode untuk melihat data lama; tanggal tidak bisa dikosongkan.
 - Setiap tabel punya kotak **Cari** (cari di server, bukan di browser), filter **Kategori** (per Jenis, bila relevan), dan **Kolom** untuk mencentang kolom mana saja yang ditampilkan (tersimpan di browser).
 - Stok Awal Sistem per **Kode Motif**; Laporan Stok tetap dijumlah per **Jenis**. Database versi lama (stok awal per Jenis) dimigrasi otomatis bila Jenis itu hanya punya 1 motif; sisanya disimpan di tabel `opening_lama` dan perlu diisi ulang per Kode Motif (cadangan: `backup/pra-stokawal-*.db`).
 
@@ -51,6 +51,10 @@ Urutan halaman: **DB → Barang Masuk → Produksi → Barang Keluar → Laporan
 - Stok pengrajin = total **keluar ke pengrajin** - total **masuk dari pengrajin**, per Pengrajin, Motif, dan Ket (contoh: keluar 600, masuk 500 -> stok 100). Ada subtotal per pengrajin, filter pengrajin/tanggal/cari, dan Export Excel. Merah = masuk melebihi keluar.
 - Bila Ket saat kembali berbeda (Belum Neci -> Sudah Neci), atur di **DB > Pemetaan Keluar -> Masuk (Pengrajin)** agar masuk "Sudah Neci" mengurangi stok "Belum Neci".
 - Barang Keluar/Masuk tanpa Nama Pengrajin tidak ikut dihitung.
+
+## Periode (semua halaman)
+- Setiap halaman punya pilihan **Periode**: *Harian* (1 tanggal), *Bulanan* (pilih bulan), atau *Rentang tanggal* (tgl x s/d y). Default **hari ini**. Tombol ‹ › menggeser satu periode (1 hari / 1 bulan / selisih rentang), tombol *Hari ini* mengembalikan ke hari ini.
+- Berlaku di Produksi (Rekap, Daftar Input, Rekap Realtime), Barang Masuk, Barang Keluar (daftar & Stok Pengrajin), dan Laporan Stok. Rekap Realtime dan Stok Pengrajin dihitung kumulatif s/d **tanggal akhir periode**.
 
 ## Login
 - Pertama kali dibuka dari komputer server (http://localhost:5000), aplikasi meminta pembuatan **username & password**. Komputer lain di jaringan tidak bisa membuat akun, dan baru bisa masuk setelah akun dibuat.

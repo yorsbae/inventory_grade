@@ -21,6 +21,8 @@ DB_PATH = os.path.join(DATA_DIR, "inventory.db")
 app = Flask(__name__, template_folder=os.path.join(RES, "templates"),
             static_folder=os.path.join(RES, "static"))
 
+app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024  # batas upload (import/restore)
+
 # --------------------------------------------------------------------------
 # Definisi tabel master + produksi
 # --------------------------------------------------------------------------
@@ -822,8 +824,10 @@ def save(key, rid=None):
         db.execute(f"INSERT INTO {s['table']}({','.join(cols)}) VALUES ({','.join('?'*len(cols))})",
                    [out[c] for c in cols])
     else:
-        db.execute(f"UPDATE {s['table']} SET {','.join(c + '=?' for c in cols)} WHERE id=?",
-                   [out[c] for c in cols] + [rid])
+        cur = db.execute(f"UPDATE {s['table']} SET {','.join(c + '=?' for c in cols)} WHERE id=?",
+                         [out[c] for c in cols] + [rid])
+        if cur.rowcount == 0:
+            return jsonify(ok=False, errors=["Data tidak ditemukan (mungkin sudah dihapus)"]), 404
     if key == "kolom_prod":
         ensure_cat_columns_after(db)
     db.commit()
@@ -1332,9 +1336,11 @@ def rekap_lines_data(db, arah, f, t, by):
         {LINE_FROM} WHERE d.arah=? AND d.tanggal>=? AND d.tanggal<=?
         GROUP BY grp ORDER BY grp""", (arah, f, t)).fetchall()
     rows = [dict(r) for r in rows]
-    if rows:
+    if rows:  # satu SSTB bisa muncul di banyak grup (mis. per Motif), jadi total SSTB dihitung distinct
+        n_sstb = db.execute(f"""SELECT COUNT(DISTINCT d.id) {LINE_FROM}
+            WHERE d.arah=? AND d.tanggal>=? AND d.tanggal<=?""", (arah, f, t)).fetchone()[0]
         rows.append({"grp": "TOTAL", "total": True, "baris": sum(r["baris"] for r in rows),
-                     "sstb": sum(r["sstb"] for r in rows), "jumlah": sum(r["jumlah"] or 0 for r in rows)})
+                     "sstb": n_sstb, "jumlah": sum(r["jumlah"] or 0 for r in rows)})
     return label, rows
 
 @app.get("/api/rekap/<name>")
@@ -1365,6 +1371,11 @@ def widths(ws, w):
         ws.column_dimensions[get_column_letter(i)].width = x
 
 def send_wb(wb, name):
+    for ws in wb.worksheets:  # teks dari input pengguna yang diawali "=" jangan dieksekusi Excel sebagai rumus
+        for row in ws.iter_rows():
+            for c in row:
+                if c.data_type == "f":
+                    c.data_type = "s"
     bio = io.BytesIO()
     wb.save(bio)
     bio.seek(0)

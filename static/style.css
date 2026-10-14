@@ -167,3 +167,10 @@ td small.pk{display:block;font-size:11px;color:#6b7280;font-weight:400}
 /* periode */
 .pbtns{display:flex;gap:4px;align-items:flex-end}
 .pbtns .btn{padding:8px 12px}
+
+/* pilih + hapus terpilih */
+th.selcol,td.selcol{width:34px;min-width:34px;text-align:center;padding-left:8px;padding-right:4px}
+.selcol input{width:auto;margin:0;cursor:pointer}
+tr.docrow td.selcol{vertical-align:top;padding-top:10px}
+.selbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;background:#fff4d6;border:1px solid #f2d68a;color:#7a5200;border-radius:8px;padding:6px 12px;margin-bottom:10px;position:sticky;top:0;z-index:15}
+@media(max-width:720px){table.resp td.selcol{justify-content:flex-start}}

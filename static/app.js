@@ -332,10 +332,11 @@ function colToggle(storeKey, onChange) {
     if (!table) return;
     table.querySelectorAll('tr').forEach(tr => {
       if (tr.classList.contains('grouphead') || tr.querySelector('td.empty')) return;
-      [...tr.children].forEach((c, i) => { if (i < cols.length) c.style.display = vis[cols[i].n] === false ? 'none' : ''; });
+      [...tr.children].forEach((c, i) => { const j = i - api.offset; if (j >= 0 && j < cols.length) c.style.display = vis[cols[j].n] === false ? 'none' : ''; });
     });
   };
-  return { el: h('div', { class: 'colcheck' }, btn, pop), vis, setCols, apply };
+  const api = { el: h('div', { class: 'colcheck' }, btn, pop), vis, setCols, apply, offset: 0 };  // offset = jumlah sel di depan yang bukan kolom data (checkbox Pilih)
+  return api;
 }
 
 /* judul kolom tabel: teks, klik = urutkan asc/desc (tabel master DB saja; halaman lain pakai panel Filter) */
@@ -507,6 +508,67 @@ function openFilterModal(inst, cfg, refreshToolbar) {
   const modal = openModal('Filter ' + cfg.title, body, foot);
 }
 
+
+/* ===== Pilih (checkbox) + Hapus terpilih. Pilihan hanya untuk baris di halaman yang tampil; hilang saat data dimuat ulang. =====
+   o: { unit:'baris'|'SSTB', url:'/api/.../bulk_delete', notify(text, cls), onDone() } */
+class RowSelect {
+  constructor(o) {
+    this.o = o; this.sel = new Set(); this.cbs = []; this.last = -1; this.allCb = null;
+    this.count = h('b', {}, '0');
+    this.btn = h('button', { type: 'button', class: 'btn sm danger', onclick: () => this.del() }, 'Hapus terpilih');
+    this.bar = h('div', { class: 'selbar', style: 'display:none' }, this.count, ` ${o.unit} dipilih`, this.btn,
+      h('button', { type: 'button', class: 'btn sm', onclick: () => this.clear() }, 'Batal pilih'));
+  }
+  reset() { this.sel.clear(); this.cbs = []; this.last = -1; this.update(); }
+  clear() { this.cbs.forEach(x => { x.cb.checked = false; }); this.sel.clear(); this.last = -1; this.update(); }
+  head() {   // sel judul kolom: pilih / batal pilih semua baris di halaman ini
+    const cb = h('input', { type: 'checkbox', title: 'Pilih semua di halaman ini' });
+    cb.onchange = () => {
+      for (const x of this.cbs) { x.cb.checked = cb.checked; cb.checked ? this.sel.add(x.id) : this.sel.delete(x.id); }
+      this.update();
+    };
+    this.allCb = cb;
+    return h('th', { class: 'selcol nosort' }, cb);
+  }
+  cell(id) {
+    const cb = h('input', { type: 'checkbox', title: 'Pilih baris ini (Shift+klik = pilih rentang)' });
+    const rec = { id, cb }; this.cbs.push(rec);
+    cb.onclick = e => {   // Shift+klik: pilih semua baris antara klik terakhir dan yang ini
+      const i = this.cbs.indexOf(rec);
+      if (e.shiftKey && this.last >= 0) {
+        const [a, b] = [Math.min(i, this.last), Math.max(i, this.last)];
+        for (let k = a; k <= b; k++) { this.cbs[k].cb.checked = cb.checked; cb.checked ? this.sel.add(this.cbs[k].id) : this.sel.delete(this.cbs[k].id); }
+      }
+      this.last = i;
+    };
+    cb.onchange = () => { cb.checked ? this.sel.add(id) : this.sel.delete(id); this.update(); };
+    return h('td', { class: 'selcol', 'data-label': 'Pilih' }, cb);
+  }
+  update() {
+    const n = this.sel.size;
+    this.count.textContent = n.toLocaleString('id-ID');
+    this.bar.style.display = n ? '' : 'none';
+    if (this.allCb) {
+      this.allCb.checked = this.cbs.length > 0 && n >= this.cbs.length && this.cbs.every(x => x.cb.checked);
+      this.allCb.indeterminate = n > 0 && !this.allCb.checked;
+    }
+  }
+  async del() {
+    const ids = [...this.sel]; if (!ids.length) return;
+    if (!confirm(`Hapus ${ids.length} ${this.o.unit} terpilih?` + (this.o.unit === 'SSTB' ? '\nSeluruh barang di dalam SSTB itu ikut terhapus.' : '') + '\nTindakan ini tidak bisa dibatalkan.')) return;
+    this.btn.disabled = true;
+    try {
+      const res = await fetch(this.o.url, J('POST', { ids }));
+      const r = await res.json();
+      if (!res.ok) { this.o.notify(r.error || 'Hapus gagal', 'err'); return; }
+      const f = r.failed || [];
+      if (f.length) this.o.notify(`${r.deleted} ${this.o.unit} dihapus, ${f.length} dilewati:\n` + [...new Set(f.map(x => x.msg))].join('\n'), 'warn', true);
+      else this.o.notify(`${r.deleted} ${this.o.unit} dihapus.`, 'ok');
+      this.reset(); this.o.onDone();
+    } finally { this.btn.disabled = false; }
+  }
+}
+
 /* tabel dengan opsi Kelompokkan (Group By): satu <tbody> per kelompok supaya baris bisa dilipat/dibuka */
 function renderGroupedTable(table, rows, groupCol, colspan, rowFn, emptyMsg) {
   [...table.querySelectorAll('tbody')].forEach(tb => tb.remove());
@@ -546,6 +608,8 @@ class Crud {
     this.range = o.range || { from: defaultFrom(), to: todayISO() };
     this.qstate = { q: '' }; this.catstate = { jenis: '' }; this.filters = {}; this.sticky = {};
     this.pstate = o.filterPanel ? newFilterState() : null;  // panel "Filter" terpadu (Produksi); tabel master pakai cara lama
+    this.rs = new RowSelect({ unit: 'baris', notify: (t, c, st) => this.notify(t, c, st),
+      url: '/api/' + key + '/bulk_delete', onDone: () => { this.load(); if (this.o.onChange) this.o.onChange(); } });
     this.ready = this.init();
   }
   async init() {
@@ -566,7 +630,7 @@ class Crud {
       const fi = buildFilterToolbarItem(this, this.o.filterPanel);
       tb.append(fi.btn, ...io.els);
       this.chipsRow = fi.chipsRow;
-      this.ct = colToggle(this.key, () => this.applyVis()); this.ct.setCols(m.cols); tb.append(this.ct.el);
+      this.ct = colToggle(this.key, () => this.applyVis()); this.ct.offset = 1; this.ct.setCols(m.cols); tb.append(this.ct.el);
     } else {
       tb.append(searchBox(this.qstate, () => { this.page = 1; this.load(); }));
       if (this.key === 'opening_prod') tb.append(katProdFilter(this.catstate, m.cols.filter(c => c.cat), () => { this.page = 1; this.load(); }));
@@ -574,22 +638,24 @@ class Crud {
       tb.append(h('span', { class: 'grow' }));
       const io = ioTools(this.key, () => { this.load(); if (this.o.onChange) this.o.onChange(); }, this.notify, this.impBox);
       this.exp = io.exp; tb.append(...io.els);
-      this.ct = colToggle(this.key, () => this.applyVis()); this.ct.setCols(m.cols); tb.append(this.ct.el);
+      this.ct = colToggle(this.key, () => this.applyVis()); this.ct.offset = 1; this.ct.setCols(m.cols); tb.append(this.ct.el);
     }
     this.thead = h('thead'); this.theadRow = h('tr'); this.thead.append(this.theadRow); this.tbody = h('tbody');
     this.table = h('table', { class: 'resp' }, this.thead, this.tbody);
     if (this.pstate) {
+      this.theadRow.append(this.rs.head());
       for (const c of m.cols) this.theadRow.append(h('th', { class: this.isInt(c) ? 'num' : '' }, c.l));
       this.theadRow.append(h('th', {}, 'Aksi'));
     } else {
       this.refreshHead();
     }
     this.pager = h('div', { class: 'pager' });
-    this.root.append(tb, this.chipsRow || '', this.msg, this.impBox,
+    this.root.append(tb, this.chipsRow || '', this.msg, this.rs.bar, this.impBox,
       h('div', { class: 'tablewrap' }, this.table), this.pager);
   }
   refreshHead() {
     this.theadRow.innerHTML = '';
+    this.theadRow.append(this.rs.head());
     for (const c of this.meta.cols) this.theadRow.append(thCell(c.l, {
       align: this.isInt(c) ? 'num' : '', sortOn: this.sort === c.n ? this.dir : null,
       onSort: () => { this.dir = (this.sort === c.n && this.dir === 'desc') ? 'asc' : 'desc'; this.sort = c.n; this.load(); }
@@ -619,6 +685,7 @@ class Crud {
   isInt(c) { return c.t === 'int' || c.num; }
   rowEl(row) {
     const tr = h('tr');
+    tr.append(this.rs.cell(row.id));
     for (const c of this.meta.cols) {
       const v = row[c.n];
       let cell = this.isInt(c) ? fmtNum(v) : c.t === 'date' ? fmtDate(v) : v == null ? '' : v;
@@ -637,10 +704,11 @@ class Crud {
     if (!this.pstate) this.refreshHead();
     const r = await (await fetch('/api/' + this.key + '?' + this.params({ page: this.page, size: this.size }))).json();
     this.exp.href = '/export/' + this.key + '?' + this.params();
+    this.rs.reset();
     const filterActive = this.pstate ? filterActiveCount(this.pstate) > 0
       : (this.qstate.q || this.catstate.jenis || this.catstate.kat || Object.keys(this.filters).length);
     const emptyMsg = filterActive ? 'Tidak ada data yang cocok dengan filter.' : 'Belum ada data.';
-    renderGroupedTable(this.table, r.rows, this.pstate ? this.pstate.group : null, this.meta.cols.length + 1,
+    renderGroupedTable(this.table, r.rows, this.pstate ? this.pstate.group : null, this.meta.cols.length + 2,
       row => this.rowEl(row), emptyMsg);
     this.tbody = this.table.querySelector('tbody');
     pagerInto(this.pager, this.page, r.pages, r.total, r.sum != null ? ` · Total jumlah: ${r.sum.toLocaleString('id-ID')}` : '',
@@ -730,6 +798,7 @@ class DocPage {
     this.cols = DOC_COLS_BASE.concat(this.keluar ? [['link_produksi', 'Link Produksi', 'link']] : [['ket_produksi', 'Keterangan Produksi', 'prod']]);
     this.page = 1; this.size = PAGE_SIZES[0]; this.sticky = {};
     this.range = { from: defaultFrom(), to: todayISO() };
+    this.rs = new RowSelect({ unit: 'SSTB', notify: (t, c, st) => this.notify(t, c, st), url: `/api/doc/${arah}/bulk_delete`, onDone: () => this.load() });
     this.pstate = newFilterState();
     if (init.sstb) {  // dibuka dari hyperlink SSTB: filter ke SSTB itu, rentang tanggal menyesuaikan
       this.range = { from: init.tanggal, to: init.tanggal > todayISO() ? init.tanggal : todayISO() };
@@ -768,14 +837,14 @@ class DocPage {
       h('span', { class: 'grow' }));
     const io = ioTools(this.arah, () => this.load(), this.notify, this.impBox, true);
     this.exp = io.exp; tb.append(...io.els);
-    this.ct = colToggle('doc-' + this.arah, () => this.applyVis());
+    this.ct = colToggle('doc-' + this.arah, () => this.applyVis()); this.ct.offset = 1;
     this.ct.setCols(this.cols.map(([n, l]) => ({ n, l }))); tb.append(this.ct.el);
-    this.theadRow = h('tr');
+    this.theadRow = h('tr', {}, this.rs.head());
     for (const [n, l, k] of this.cols) this.theadRow.append(h('th', { class: k === 'int' ? 'num' : '' }, l));
     this.theadRow.append(h('th', {}, 'Aksi'));
     this.tbody = h('tbody'); this.pager = h('div', { class: 'pager' });
     this.table = h('table', { class: 'resp' }, h('thead', {}, this.theadRow), this.tbody);
-    this.root.append(tb, this.chipsRow, this.chips, this.msg, this.impBox,
+    this.root.append(tb, this.chipsRow, this.chips, this.msg, this.rs.bar, this.impBox,
       h('div', { class: 'tablewrap' }, this.table), this.pager);
   }
   applyVis() { if (this.ct) this.ct.apply(this.table); }
@@ -792,7 +861,7 @@ class DocPage {
   }
   /* 1 SSTB = 1 baris tabel. Kolom tingkat-barang (motif, jumlah, ket, progres) berisi satu baris kecil per motif, sejajar antar kolom. */
   rowEl(row) {
-    const tr = h('tr', { class: 'docrow' });
+    const tr = h('tr', { class: 'docrow' }, this.rs.cell(row.doc_id));
     const items = row.items || [];
     const ln = (txt, cls, title) => h('div', { class: 'ln' + (cls ? ' ' + cls : ''), title: title || (typeof txt === 'string' ? txt : null) }, txt);
     const stack = lines => h('div', { class: 'stack' }, lines);
@@ -848,6 +917,7 @@ class DocPage {
   async load() {
     const r = await (await fetch(`/api/lines/${this.arah}?` + this.params({ page: this.page, size: this.size }))).json();
     this.exp.href = `/export/${this.arah}?` + this.params();
+    this.rs.reset();
     this.chips.innerHTML = '';
     this.chips.append(h('span', { class: 'chip' }, h('b', {}, r.docs.toLocaleString('id-ID')), ' SSTB'),
       h('span', { class: 'chip' }, h('b', {}, r.baris.toLocaleString('id-ID')), ' baris barang'),
@@ -855,7 +925,7 @@ class DocPage {
     const emptyMsg = filterActiveCount(this.pstate)
       ? 'Tidak ada data yang cocok dengan filter.'
       : 'Belum ada data pada rentang tanggal ini. Klik "+ Tambah ' + this.label + '".';
-    renderGroupedTable(this.table, r.rows, this.pstate.group, this.cols.length + 1, row => this.rowEl(row), emptyMsg);
+    renderGroupedTable(this.table, r.rows, this.pstate.group, this.cols.length + 2, row => this.rowEl(row), emptyMsg);
     this.tbody = this.table.querySelector('tbody');
     pagerInto(this.pager, this.page, r.pages, r.total, '', p => { this.page = p; this.load(); },
       this.size, n => { this.size = n; this.page = 1; this.load(); }, 'SSTB');

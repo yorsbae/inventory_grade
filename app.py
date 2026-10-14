@@ -1021,22 +1021,21 @@ def api_create(key):
 def api_update(key, rid):
     return save(key, rid)
 
-@app.delete("/api/<key>/<int:rid>")
-def api_delete(key, rid):
-    s = spec_or_404(key)
-    db = get_db()
+def delete_row(db, key, rid):
+    """Hapus satu baris master/produksi. Return None bila berhasil, atau teks alasan bila ditolak. Tidak commit."""
+    s = SPECS[key]
     if key == "kolom_prod":
         r = db.execute("SELECT kode FROM ref_kolom_prod WHERE id=?", (rid,)).fetchone()
         if not r:
-            return jsonify(ok=True)
+            return None
         kode = r[0]
         if len(CATS) <= 1:
-            return jsonify(ok=False, errors=["Minimal harus ada 1 kolom produksi."]), 409
+            return "Minimal harus ada 1 kolom produksi."
         used = sum(db.execute(f"SELECT COUNT(*) FROM {t} WHERE {kode}<>0").fetchone()[0]
                    for t in ("produksi", "opening_prod"))
         if used:
-            return jsonify(ok=False, errors=[f"Tidak bisa dihapus: kolom ini masih berisi angka di {used} data produksi/stok awal. "
-                                              "Kosongkan (0) dulu atau ubah judulnya saja."]), 409
+            return (f"Tidak bisa dihapus: kolom ini masih berisi angka di {used} data produksi/stok awal. "
+                    "Kosongkan (0) dulu atau ubah judulnya saja.")
         db.execute("DELETE FROM map_keluar WHERE kolom_id=?", (rid,))
         db.execute("DELETE FROM ref_kolom_prod WHERE id=?", (rid,))
         for t in ("produksi", "opening_prod"):
@@ -1045,18 +1044,53 @@ def api_delete(key, rid):
             except sqlite3.OperationalError:
                 pass  # SQLite lama: kolom dibiarkan (tidak tampil & tidak dihitung)
         reload_cats(db)
-        db.commit()
-        return jsonify(ok=True)
+        return None
     used = 0
     for tbl, col in USAGE.get(key, []):
         used += db.execute(f"SELECT COUNT(*) FROM {tbl} WHERE {col}=?", (rid,)).fetchone()[0]
     if used:
-        return jsonify(ok=False, errors=[f"Tidak bisa dihapus: masih dipakai di {used} data. Ubah namanya saja bila perlu."]), 409
+        return f"Tidak bisa dihapus: masih dipakai di {used} data. Ubah namanya saja bila perlu."
     if key == "produksi":  # lepas tautan Barang Keluar ke input produksi yang dihapus
         db.execute("UPDATE dokumen_item SET link_produksi_id=NULL WHERE link_produksi_id=?", (rid,))
     db.execute(f"DELETE FROM {s['table']} WHERE id=?", (rid,))
+    return None
+
+@app.delete("/api/<key>/<int:rid>")
+def api_delete(key, rid):
+    spec_or_404(key)
+    db = get_db()
+    err = delete_row(db, key, rid)
+    if err:
+        return jsonify(ok=False, errors=[err]), 409
     db.commit()
     return jsonify(ok=True)
+
+BULK_MAX = 500
+
+def bulk_ids():
+    ids = (request.get_json(force=True, silent=True) or {}).get("ids")
+    if not isinstance(ids, list) or not ids:
+        abort(400)
+    out = []
+    for x in ids[:BULK_MAX]:
+        if isinstance(x, int) and not isinstance(x, bool) and x not in out:
+            out.append(x)
+    return out
+
+@app.post("/api/<key>/bulk_delete")
+def api_bulk_delete(key):
+    """Hapus banyak baris sekaligus (fitur Pilih). Baris yang tidak boleh dihapus (masih dipakai) dilewati dan dilaporkan."""
+    spec_or_404(key)
+    db = get_db()
+    deleted, failed = 0, []
+    for rid in bulk_ids():
+        err = delete_row(db, key, rid)
+        if err:
+            failed.append(dict(id=rid, msg=err))
+        else:
+            deleted += 1
+    db.commit()
+    return jsonify(ok=True, deleted=deleted, failed=failed)
 
 @app.route("/api/setting/strict", methods=["GET", "POST"])
 def api_strict():
@@ -1344,15 +1378,32 @@ def api_doc_create(name):
 def api_doc_update(name, doc_id):
     return save_doc(name, doc_id)
 
+def delete_doc(db, arah, doc_id):
+    """Hapus satu SSTB beserta barisnya (tidak commit). Return True bila SSTB ada."""
+    if not db.execute("SELECT 1 FROM dokumen WHERE id=? AND arah=?", (doc_id, arah)).fetchone():
+        return False
+    if arah == "M":  # lepas tautan produksi ke SSTB yang dihapus
+        db.execute("UPDATE produksi SET link_masuk_id=NULL WHERE link_masuk_id=?", (doc_id,))
+    db.execute("DELETE FROM dokumen_item WHERE dokumen_id=?", (doc_id,))
+    db.execute("DELETE FROM dokumen WHERE id=? AND arah=?", (doc_id, arah))
+    return True
+
 @app.delete("/api/doc/<name>/<int:doc_id>")
 def api_doc_delete(name, doc_id):
     arah = arah_or_404(name)
     db = get_db()
-    if arah == "M":  # lepas tautan produksi ke SSTB yang dihapus
-        db.execute("UPDATE produksi SET link_masuk_id=NULL WHERE link_masuk_id=?", (doc_id,))
-    db.execute("DELETE FROM dokumen WHERE id=? AND arah=?", (doc_id, arah))
+    delete_doc(db, arah, doc_id)
     db.commit()
     return jsonify(ok=True)
+
+@app.post("/api/doc/<name>/bulk_delete")
+def api_doc_bulk_delete(name):
+    """Hapus banyak SSTB sekaligus (fitur Pilih di Barang Masuk/Keluar)."""
+    arah = arah_or_404(name)
+    db = get_db()
+    deleted = sum(1 for i in bulk_ids() if delete_doc(db, arah, i))
+    db.commit()
+    return jsonify(ok=True, deleted=deleted, failed=[])
 
 @app.delete("/api/item/<name>/<int:item_id>")
 def api_item_delete(name, item_id):

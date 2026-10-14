@@ -56,6 +56,11 @@ Urutan halaman: **DB → Barang Masuk → Produksi → Barang Keluar → Laporan
 - Setiap halaman punya pilihan **Periode**: *Harian* (1 tanggal), *Bulanan* (pilih bulan), atau *Rentang tanggal* (tgl x s/d y). Default **hari ini**. Tombol ‹ › menggeser satu periode (1 hari / 1 bulan / selisih rentang), tombol *Hari ini* mengembalikan ke hari ini.
 - Berlaku di Produksi (Rekap, Daftar Input, Rekap Realtime), Barang Masuk, Barang Keluar (daftar & Stok Pengrajin), dan Laporan Stok. Rekap Realtime dan Stok Pengrajin dihitung kumulatif s/d **tanggal akhir periode**.
 
+## Pilih & hapus massal
+- Semua tabel (DB master, Produksi, Barang Masuk, Barang Keluar) punya kolom **checkbox** di paling kiri. Centang baris yang mau dihapus (**Shift+klik** = pilih rentang), atau centang kotak di judul kolom untuk memilih semua baris di halaman itu (naikkan "baris per halaman" untuk memilih lebih banyak).
+- Muncul bar kuning "N dipilih" dengan tombol **Hapus terpilih** (ada konfirmasi) dan **Batal pilih**. Di Barang Masuk/Keluar yang dihapus adalah seluruh SSTB beserta barisnya.
+- Master yang masih dipakai data lain (mis. motif yang sudah ada transaksinya) otomatis **dilewati** dan dilaporkan; yang lain tetap terhapus. Pilihan hilang saat halaman/filter/periode berganti. Maksimal 500 baris per permintaan.
+
 ## Login
 - Pertama kali dibuka dari komputer server (http://localhost:5000), aplikasi meminta pembuatan **username & password**. Komputer lain di jaringan tidak bisa membuat akun, dan baru bisa masuk setelah akun dibuat.
 - Menu **Ganti Password** dan **Keluar** ada di header. Sesi berlaku 7 hari; 5 kali salah password mengunci IP tersebut 60 detik.

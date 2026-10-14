@@ -8,6 +8,8 @@
 <a class="bk" href="/backup" title="Unduh cadangan database">Backup DB</a>
 <a class="bk" href="#" id="restoreBtn" title="Pulihkan database dari file cadangan (.db)">Restore DB</a>
 <input type="file" id="restoreFile" accept=".db,.sqlite,.sqlite3" hidden>
+<a class="bk" href="/akun" title="Ganti password">Ganti Password</a>
+<form method="post" action="/logout" class="logout"><button class="bk" type="submit" title="Keluar">Keluar</button></form>
 <nav>{% for k,l in pages %}<a href="/{{k}}" class="{{ 'on' if current==k else '' }}">{{l}}</a>{% endfor %}</nav></header>
 <main><h1>{{ title }}</h1>{% block body %}{% endblock %}</main>
 <script src="/static/app.js"></script>

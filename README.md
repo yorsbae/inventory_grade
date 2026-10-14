@@ -36,6 +36,12 @@ Urutan halaman: **DB → Barang Masuk → Produksi → Barang Keluar → Laporan
 - Setiap SSTB hanya tampil **sekali** di daftar; motif A, B, C-nya ditumpuk sejajar dalam baris itu, dengan Total SSTB di bawah kolom Jumlah. Edit / Cetak / Hapus bekerja untuk seluruh SSTB.
 - Pencarian, Filter, Urutkan, Kelompokkan, dan paging menghitung per SSTB (Filter motif = tampilkan SSTB yang memuat motif itu). Export Excel tetap datar (satu baris per barang) agar bisa di-import kembali.
 
+## Login
+- Pertama kali dibuka dari komputer server (http://localhost:5000), aplikasi meminta pembuatan **username & password**. Komputer lain di jaringan tidak bisa membuat akun, dan baru bisa masuk setelah akun dibuat.
+- Menu **Ganti Password** dan **Keluar** ada di header. Sesi berlaku 7 hari; 5 kali salah password mengunci IP tersebut 60 detik.
+- Akun disimpan (hash) di `data/auth.json` dan kunci sesi di `data/secret.key`, terpisah dari database, jadi Restore DB tidak mereset password. Lupa password: hentikan aplikasi, hapus `data/auth.json`, jalankan ulang, lalu buat akun baru dari localhost.
+- Jangan ikut menyalin `data/auth.json` dan `data/secret.key` ke tempat yang tidak aman.
+
 ## Restore DB (import database)
 - Tombol **Restore DB** di header: pilih file cadangan `.db` (dari tombol Backup DB atau folder `backup/`). Aplikasi memeriksa file, mencadangkan data saat ini ke `backup/pra-restore-*.db`, lalu mengganti seluruh data dengan isi file itu. Cadangan versi lama dimigrasi otomatis.
 

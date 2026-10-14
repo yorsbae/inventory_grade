@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="id"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{ title }} - Stok Grade</title>
+<link rel="stylesheet" href="/static/style.css">
+</head><body class="login-page">
+<div class="login-box">
+<div class="login-brand">Stok Grade</div>
+<h1>{{ title }}</h1>
+{% if err %}<div class="login-err">{{ err }}</div>{% endif %}
+{% if ok %}<div class="login-ok">{{ ok }}</div>{% endif %}
+{% if mode == 'blocked' %}
+<p class="hint">Aplikasi belum memiliki akun. Buka <b>http://localhost</b> di komputer server ini untuk membuat akun pertama, lalu login dari komputer ini.</p>
+{% else %}
+<form method="post" autocomplete="on">
+{% if mode == 'login' %}
+<input type="hidden" name="next" value="{{ next }}">
+<label>Username<input name="username" autocomplete="username" autofocus required></label>
+<label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+<button class="btn primary" type="submit">Masuk</button>
+{% elif mode == 'setup' %}
+<p class="hint">Buat akun untuk mengamankan aplikasi. Semua pengguna memakai akun ini.</p>
+<label>Username<input name="username" autocomplete="username" autofocus required></label>
+<label>Password (min. 6 karakter)<input name="password" type="password" autocomplete="new-password" required minlength="6"></label>
+<label>Ulangi password<input name="password2" type="password" autocomplete="new-password" required minlength="6"></label>
+<button class="btn primary" type="submit">Buat akun</button>
+{% else %}
+<label>Password lama<input name="old" type="password" autocomplete="current-password" autofocus required></label>
+<label>Password baru (min. 6 karakter)<input name="password" type="password" autocomplete="new-password" required minlength="6"></label>
+<label>Ulangi password baru<input name="password2" type="password" autocomplete="new-password" required minlength="6"></label>
+<button class="btn primary" type="submit">Simpan</button> <a class="btn" href="/">Kembali</a>
+{% endif %}
+</form>
+{% endif %}
+</div></body></html>

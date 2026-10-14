@@ -3,10 +3,12 @@
 Model data ternormalisasi: transaksi hanya menyimpan ID master. Motif, Jenis, Rumus,
 Jumlah produksi dihitung saat ditampilkan, jadi tidak ada data ganda yang bisa berbeda.
 """
-import os, sys, io, re, json, shutil, socket, sqlite3, tempfile, threading, webbrowser
+import os, sys, io, re, json, shutil, socket, sqlite3, tempfile, threading, time, hmac, secrets, webbrowser
 from collections import Counter
+from urllib.parse import urlencode
 import datetime as dt
-from flask import Flask, g, request, jsonify, render_template, send_file, redirect, abort
+from flask import Flask, g, request, jsonify, render_template, send_file, redirect, abort, session
+from werkzeug.security import generate_password_hash, check_password_hash
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -22,6 +24,149 @@ app = Flask(__name__, template_folder=os.path.join(RES, "templates"),
             static_folder=os.path.join(RES, "static"))
 
 app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024  # batas upload (import/restore)
+
+# --------------------------------------------------------------------------
+# Login (sesi). Kredensial disimpan di data/auth.json (hash) dan kunci sesi di data/secret.key,
+# SENGAJA di luar database supaya Restore DB tidak menimpa/mereset password.
+# --------------------------------------------------------------------------
+AUTH_PATH = os.path.join(DATA_DIR, "auth.json")
+SECRET_PATH = os.path.join(DATA_DIR, "secret.key")
+PUBLIC_ENDPOINTS = {"login", "logout", "setup", "static"}
+_fails = {}          # ip -> [jumlah gagal, waktu terkunci sampai]
+_auth_lock = threading.Lock()
+MAX_FAILS, LOCK_SECONDS = 5, 60
+
+def load_auth():
+    try:
+        with open(AUTH_PATH, encoding="utf-8") as f:
+            a = json.load(f)
+        return a if a.get("username") and a.get("hash") else None
+    except (OSError, ValueError):
+        return None
+
+def save_auth(username, password):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    tmp = AUTH_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"username": username, "hash": generate_password_hash(password)}, f)
+    os.replace(tmp, AUTH_PATH)
+
+def secret_key():
+    os.makedirs(DATA_DIR, exist_ok=True)
+    if not os.path.exists(SECRET_PATH):
+        with open(SECRET_PATH, "wb") as f:
+            f.write(secrets.token_bytes(32))
+    with open(SECRET_PATH, "rb") as f:
+        return f.read()
+
+app.secret_key = secret_key()
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
+                  PERMANENT_SESSION_LIFETIME=7 * 24 * 3600)
+
+def is_local():
+    return request.remote_addr in ("127.0.0.1", "::1")
+
+def safe_next(n):
+    return n if n and n.startswith("/") and not n.startswith("//") and "\\" not in n else "/"
+
+def is_locked(ip):
+    with _auth_lock:
+        n, until = _fails.get(ip, (0, 0))
+        return n >= MAX_FAILS and time.time() < until
+
+def note_fail(ip):
+    with _auth_lock:
+        n, until = _fails.get(ip, (0, 0))
+        if time.time() >= until:
+            n = 0
+        n += 1
+        _fails[ip] = (n, time.time() + LOCK_SECONDS)
+
+@app.before_request
+def require_login():
+    if request.endpoint in PUBLIC_ENDPOINTS or request.endpoint is None:
+        return None
+    auth = load_auth()
+    if auth and session.get("u") == auth["username"] and session.get("k") == auth["hash"][-12:]:
+        return None
+    if request.path.startswith(("/api/", "/import/", "/restore")):
+        return jsonify(ok=False, error="Sesi habis, silakan login lagi", login=True), 401
+    return redirect("/login?" + urlencode({"next": safe_next(request.full_path.rstrip("?"))}))
+
+def start_session(auth):
+    session.clear()
+    session.permanent = True
+    session["u"] = auth["username"]; session["k"] = auth["hash"][-12:]  # sesi lama batal bila password diganti
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    auth = load_auth()
+    if not auth:
+        return redirect("/setup")
+    nxt = safe_next(request.values.get("next"))
+    err = None
+    if request.method == "POST":
+        ip = request.remote_addr
+        if is_locked(ip):
+            err = f"Terlalu banyak percobaan gagal. Coba lagi dalam {LOCK_SECONDS} detik."
+        else:
+            u = request.form.get("username", "")
+            ok_u = hmac.compare_digest(u.strip().encode(), auth["username"].encode())
+            ok_p = check_password_hash(auth["hash"], request.form.get("password", ""))
+            if ok_u and ok_p:
+                _fails.pop(ip, None)
+                start_session(auth)
+                return redirect(nxt)
+            note_fail(ip)
+            err = "Username atau password salah."
+    return render_template("login.html", mode="login", title="Login", err=err, next=nxt), (401 if err else 200)
+
+@app.route("/setup", methods=["GET", "POST"])
+def setup():
+    """Pembuatan akun pertama kali. Hanya bisa dari komputer server (localhost) supaya tidak direbut orang lain di jaringan."""
+    if load_auth():
+        return redirect("/login")
+    if not is_local():
+        return render_template("login.html", mode="blocked", title="Belum diatur", err=None, next="/"), 403
+    err = None
+    if request.method == "POST":
+        u = request.form.get("username", "").strip()
+        p1, p2 = request.form.get("password", ""), request.form.get("password2", "")
+        if not u:
+            err = "Username wajib diisi."
+        elif len(p1) < 6:
+            err = "Password minimal 6 karakter."
+        elif p1 != p2:
+            err = "Konfirmasi password tidak sama."
+        else:
+            save_auth(u, p1)
+            start_session(load_auth())
+            return redirect("/")
+    return render_template("login.html", mode="setup", title="Buat Akun", err=err, next="/"), (400 if err else 200)
+
+@app.route("/akun", methods=["GET", "POST"])
+def akun():
+    """Ganti password (perlu password lama)."""
+    auth = load_auth()
+    err = ok = None
+    if request.method == "POST":
+        p0, p1, p2 = (request.form.get(k, "") for k in ("old", "password", "password2"))
+        if not check_password_hash(auth["hash"], p0):
+            err = "Password lama salah."
+        elif len(p1) < 6:
+            err = "Password baru minimal 6 karakter."
+        elif p1 != p2:
+            err = "Konfirmasi password tidak sama."
+        else:
+            save_auth(auth["username"], p1)
+            start_session(load_auth())
+            ok = "Password berhasil diganti."
+    return render_template("login.html", mode="akun", title="Ganti Password", err=err, ok=ok, next="/"), (400 if err else 200)
+
+@app.post("/logout")
+def logout():
+    session.clear()
+    return redirect("/login")
 
 # --------------------------------------------------------------------------
 # Definisi tabel master + produksi

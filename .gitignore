@@ -24,3 +24,6 @@ dist/
 data/*.db
 data/*.tmp
 backup/*.db
+data/auth.json
+data/auth.json.tmp
+data/secret.key

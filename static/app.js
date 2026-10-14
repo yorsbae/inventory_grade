@@ -1,3 +1,13 @@
+/* Sesi habis (401): kembali ke halaman login. */
+(() => {
+  const orig = window.fetch.bind(window);
+  window.fetch = async (...a) => {
+    const r = await orig(...a);
+    if (r.status === 401) { location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search); }
+    return r;
+  };
+})();
+
 /* ===== helper ===== */
 function h(tag, attrs, ...kids) {
   const e = document.createElement(tag);

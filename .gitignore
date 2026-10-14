@@ -19,3 +19,8 @@ python/
 build/
 dist/
 *.egg-info/
+
+# Data & cadangan (data bisnis, jangan di-commit)
+data/*.db
+data/*.tmp
+backup/*.db

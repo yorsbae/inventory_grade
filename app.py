@@ -3,7 +3,8 @@
 Model data ternormalisasi: transaksi hanya menyimpan ID master. Motif, Jenis, Rumus,
 Jumlah produksi dihitung saat ditampilkan, jadi tidak ada data ganda yang bisa berbeda.
 """
-import os, sys, io, re, json, shutil, socket, sqlite3, threading, webbrowser
+import os, sys, io, re, json, shutil, socket, sqlite3, tempfile, threading, webbrowser
+from collections import Counter
 import datetime as dt
 from flask import Flask, g, request, jsonify, render_template, send_file, redirect, abort
 from openpyxl import Workbook, load_workbook
@@ -240,8 +241,27 @@ def init_db():
     if opening_migrated:
         for jid, jml, tgl in db.execute("SELECT jenis_id, jumlah, tanggal_mulai FROM opening_lama").fetchall():
             opening_to_motif(db, jid, jml, tgl)
+    warns = ensure_unique_indexes(db)
     db.commit()
     db.close()
+    return warns
+
+# Keunikan master di level database (bukan hanya di aplikasi) supaya import/restore/klik ganda tidak bisa membuat duplikat.
+UNIQUE_MASTER = [("ref_motif", "lower(kode_motif)"), ("ref_jenis", "lower(nama)"), ("ref_ket", "lower(nama)"),
+                 ("ref_dept", "lower(nama)"), ("ref_ketprod", "lower(nama)"), ("ref_pengrajin", "lower(nama)"),
+                 ("ref_karyawan", "lower(nama)"), ("ref_kolom_prod", "lower(nama)"), ("ref_kolom_prod", "kode")]
+
+def ensure_unique_indexes(db):
+    """Buat unique index master. Bila data lama sudah terlanjur ganda, index dilewati (data tidak diubah) dan dilaporkan."""
+    warns = []
+    for tbl, expr in UNIQUE_MASTER:
+        name = "ux_" + tbl + "_" + re.sub(r"\W+", "", expr)
+        try:
+            db.execute(f"CREATE UNIQUE INDEX IF NOT EXISTS {name} ON {tbl}({expr})")
+        except sqlite3.IntegrityError:
+            msg = f"Data ganda di {tbl} ({expr}): unique index dilewati. Rapikan datanya lalu jalankan ulang aplikasi."
+            print("  [!] " + msg); warns.append(msg)
+    return warns
 
 def opening_to_motif(db, jenis_id, jumlah, tgl):
     """Stok awal lama per Jenis -> per Kode Motif. Otomatis hanya bila Jenis itu punya tepat 1 motif.
@@ -851,6 +871,8 @@ def api_delete(key, rid):
         used += db.execute(f"SELECT COUNT(*) FROM {tbl} WHERE {col}=?", (rid,)).fetchone()[0]
     if used:
         return jsonify(ok=False, errors=[f"Tidak bisa dihapus: masih dipakai di {used} data. Ubah namanya saja bila perlu."]), 409
+    if key == "produksi":  # lepas tautan Barang Keluar ke input produksi yang dihapus
+        db.execute("UPDATE dokumen_item SET link_produksi_id=NULL WHERE link_produksi_id=?", (rid,))
     db.execute(f"DELETE FROM {s['table']} WHERE id=?", (rid,))
     db.commit()
     return jsonify(ok=True)
@@ -1045,7 +1067,8 @@ def api_available():
     db = get_db()
     r = ref_lookup(db, "jenis", request.args.get("jenis", ""))
     tgl = parse_date(request.args.get("tanggal")) or dt.date.today().isoformat()
-    doc = int(request.args.get("doc") or 0) or None
+    d = request.args.get("doc") or ""
+    doc = int(d) if d.isdigit() and int(d) else None
     return jsonify(available=balance_upto(db, r["id"], tgl, doc) if r else None)
 
 def validate_doc(db, arah, data, doc_id=None):
@@ -1089,7 +1112,8 @@ def validate_doc(db, arah, data, doc_id=None):
         if m and k and jml and jml > 0:
             lp = parse_link_id(it.get("link_produksi")) if arah == "K" else None  # opsional
             items.append(dict(motif_id=m["id"], ket_id=k["id"], jumlah=jml, link_produksi_id=lp))
-            per_jenis[m["jenis_id"]] = per_jenis.get(m["jenis_id"], 0) + jml
+            if m["jenis_id"] is not None:  # motif tanpa Jenis tidak punya saldo untuk dicek
+                per_jenis[m["jenis_id"]] = per_jenis.get(m["jenis_id"], 0) + jml
     if arah == "K" and not errs and tanggal:
         strict = get_setting(db, "strict_keluar") == "1"
         for jid, need in per_jenis.items():
@@ -1143,6 +1167,8 @@ def api_doc_update(name, doc_id):
 def api_doc_delete(name, doc_id):
     arah = arah_or_404(name)
     db = get_db()
+    if arah == "M":  # lepas tautan produksi ke SSTB yang dihapus
+        db.execute("UPDATE produksi SET link_masuk_id=NULL WHERE link_masuk_id=?", (doc_id,))
     db.execute("DELETE FROM dokumen WHERE id=? AND arah=?", (doc_id, arah))
     db.commit()
     return jsonify(ok=True)
@@ -1156,6 +1182,8 @@ def api_item_delete(name, item_id):
     if r:
         db.execute("DELETE FROM dokumen_item WHERE id=?", (item_id,))
         if not db.execute("SELECT 1 FROM dokumen_item WHERE dokumen_id=?", (r["dokumen_id"],)).fetchone():
+            if arah == "M":
+                db.execute("UPDATE produksi SET link_masuk_id=NULL WHERE link_masuk_id=?", (r["dokumen_id"],))
             db.execute("DELETE FROM dokumen WHERE id=?", (r["dokumen_id"],))
         db.commit()
     return jsonify(ok=True)
@@ -1519,6 +1547,10 @@ def read_sheet(fileobj, fields):
             rows.append((r, row))
     return rows, None
 
+def sig_row(vals):
+    """Tanda tangan baris untuk deteksi duplikat: kosong ('' / None) dianggap sama, teks tidak peka huruf besar/kecil."""
+    return tuple(v.strip().lower() if isinstance(v, str) and v.strip() else (None if v in ("", None) else v) for v in vals)
+
 @app.post("/import/<key>")
 def import_xlsx(key):
     db = get_db()
@@ -1529,11 +1561,21 @@ def import_xlsx(key):
     rows, err = read_sheet(request.files.get("file"), [(c["n"], c["l"], c.get("alias", [])) for c in cols])
     if err:
         return err
-    ok, errors = 0, []
+    ok, dup, errors = 0, 0, []
+    # Tabel tanpa kolom unik (mis. Produksi): baris yang identik dengan data yang SUDAH ada dilewati,
+    # sehingga import ulang file yang sama tidak menggandakan data.
+    existing = None
+    if not any(c.get("uniq") for c in cols):
+        names = [dbcol(c) for c in cols]
+        existing = Counter(sig_row(r) for r in db.execute(f"SELECT {','.join(names)} FROM {s['table']}"))
     for rn, row in rows:
         out, errs = clean_row(db, key, row)
         if errs:
             errors.append({"row": rn, "msg": "; ".join(errs)}); continue
+        if existing is not None:
+            sg = sig_row([out[dbcol(c)] for c in cols])
+            if existing[sg] > 0:
+                existing[sg] -= 1; dup += 1; continue
         if key == "kolom_prod":
             out["kode"] = kolom_slug(db, out["nama"])
         cn = list(out.keys())
@@ -1542,7 +1584,7 @@ def import_xlsx(key):
     if key == "kolom_prod":
         ensure_cat_columns_after(db)
     db.commit()
-    return jsonify(ok=True, inserted=ok, unit="baris", errors=errors[:200], error_count=len(errors))
+    return jsonify(ok=True, inserted=ok, duplicates=dup, unit="baris", errors=errors[:200], error_count=len(errors))
 
 def import_docs(db, name):
     arah = ARAH[name]
@@ -1554,17 +1596,24 @@ def import_docs(db, name):
         sstb = text_of(row.get("sstb"))
         if not sstb:
             errors.append({"row": rn, "msg": "SSTB kosong"}); continue
-        g = groups.get(sstb)
+        gk = sstb.lower()  # SSTB tidak peka huruf besar/kecil (sama seperti validasi di DB)
+        g = groups.get(gk)
         if g is None:
-            g = groups[sstb] = dict(hdr=dict(sstb=sstb, tanggal=row.get("tanggal"), dept=row.get("dept"),
-                                            pengrajin=row.get("pengrajin")), items=[], rows=[])
+            g = groups[gk] = dict(hdr=dict(sstb=sstb, tanggal=row.get("tanggal"), dept=row.get("dept"),
+                                          pengrajin=row.get("pengrajin")), items=[], rows=[], seen=set())
         elif parse_date(row.get("tanggal")) != parse_date(g["hdr"]["tanggal"]) or \
-                text_of(row.get("dept")).lower() != text_of(g["hdr"]["dept"]).lower():
-            errors.append({"row": rn, "msg": f"SSTB {sstb}: Tanggal/Dept berbeda dari baris pertama SSTB ini"}); continue
+                text_of(row.get("dept")).lower() != text_of(g["hdr"]["dept"]).lower() or \
+                text_of(row.get("pengrajin")).lower() != text_of(g["hdr"]["pengrajin"]).lower():
+            errors.append({"row": rn, "msg": f"SSTB {sstb}: Tanggal/Dept/Pengrajin berbeda dari baris pertama SSTB ini"}); continue
+        lk = (text_of(row.get("kode_motif")).lower(), text_of(row.get("ket")).lower())
+        if lk in g["seen"]:  # baris ganda (Kode Motif + Ket sama) di SSTB yang sama: tidak dijumlahkan diam-diam
+            errors.append({"row": rn, "msg": f"SSTB {sstb}: baris ganda (Kode Motif + Ket sama), dilewati"}); continue
+        g["seen"].add(lk)
         g["items"].append(dict(kode_motif=row.get("kode_motif"), ket=row.get("ket"), jumlah=row.get("jumlah")))
         g["rows"].append(rn)
     n_doc = 0
-    for sstb, g in groups.items():
+    for g in groups.values():
+        sstb = g["hdr"]["sstb"]
         c, errs, _ = validate_doc(db, arah, dict(g["hdr"], items=g["items"]))
         if errs:
             for i, msg in errs:
@@ -1578,13 +1627,34 @@ def import_docs(db, name):
 # --------------------------------------------------------------------------
 # Backup
 # --------------------------------------------------------------------------
+def prune_backups(prefix, keep):
+    """Simpan hanya `keep` cadangan terbaru berawalan `prefix` (nama berformat tanggal, jadi urut alfabet = urut waktu)."""
+    if not os.path.isdir(BACKUP_DIR):
+        return
+    files = sorted(f for f in os.listdir(BACKUP_DIR) if f.startswith(prefix) and f.endswith(".db"))
+    for old in files[:-keep] if keep > 0 else files:
+        try:
+            os.remove(os.path.join(BACKUP_DIR, old))
+        except OSError:
+            pass
+
+def snapshot_db(dest):
+    """Salin konsisten database aktif ke file `dest` (API backup SQLite, aman walau ada koneksi lain)."""
+    src = sqlite3.connect(DB_PATH); dst = sqlite3.connect(dest)
+    try:
+        src.backup(dst)
+    finally:
+        dst.close(); src.close()
+
 @app.get("/backup")
 def backup_download():
     os.makedirs(BACKUP_DIR, exist_ok=True)
     p = os.path.join(BACKUP_DIR, f"manual-{dt.datetime.now():%Y%m%d-%H%M%S}.db")
-    src = sqlite3.connect(DB_PATH); dst = sqlite3.connect(p)
-    src.backup(dst); dst.close(); src.close()
+    snapshot_db(p)
+    prune_backups("manual-", 10)  # tidak menumpuk selamanya
     return send_file(p, as_attachment=True, download_name=os.path.basename(p))
+
+_restore_lock = threading.Lock()
 
 @app.post("/restore")
 def restore_db():
@@ -1592,11 +1662,14 @@ def restore_db():
     f = request.files.get("file")
     if not f or not f.filename:
         return jsonify(ok=False, error="File belum dipilih"), 400
+    if not _restore_lock.acquire(blocking=False):
+        return jsonify(ok=False, error="Restore lain sedang berjalan, coba lagi sebentar"), 409
     os.makedirs(DATA_DIR, exist_ok=True); os.makedirs(BACKUP_DIR, exist_ok=True)
-    tmp = os.path.join(DATA_DIR, "restore-upload.tmp")
-    f.save(tmp)
+    fd, tmp = tempfile.mkstemp(prefix="restore-", suffix=".tmp", dir=DATA_DIR)  # nama unik, bukan nama tetap
+    os.close(fd)
     src = None
     try:
+        f.save(tmp)
         with open(tmp, "rb") as fh:
             if fh.read(16) != b"SQLite format 3\x00":
                 return jsonify(ok=False, error="Bukan file database (.db) yang valid"), 400
@@ -1606,40 +1679,42 @@ def restore_db():
         tables = {r[0] for r in src.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if "ref_motif" not in tables or not ({"dokumen", "trx_masuk"} & tables):
             return jsonify(ok=False, error="Ini bukan database Stok Grade (tabel master/transaksi tidak ditemukan)"), 400
-        pra = os.path.join(BACKUP_DIR, f"pra-restore-{dt.datetime.now():%Y%m%d-%H%M%S}.db")
+        pra = None
         if os.path.exists(DB_PATH):
-            cur = sqlite3.connect(DB_PATH); bk = sqlite3.connect(pra)
-            cur.backup(bk); bk.close(); cur.close()
+            pra = os.path.join(BACKUP_DIR, f"pra-restore-{dt.datetime.now():%Y%m%d-%H%M%S}.db")
+            snapshot_db(pra)
         dst = sqlite3.connect(DB_PATH)
         try:
             src.backup(dst)
         finally:
             dst.close()
         src.close(); src = None
-        init_db()  # migrasi otomatis bila file cadangan dari versi lebih lama
+        warns = init_db()  # migrasi otomatis bila file cadangan dari versi lebih lama
         con = sqlite3.connect(DB_PATH); con.row_factory = sqlite3.Row
         try:
             reload_cats(con)
         finally:
             con.close()
-        return jsonify(ok=True, pra=os.path.basename(pra))
+        prune_backups("pra-restore-", 10)
+        return jsonify(ok=True, pra=os.path.basename(pra) if pra else None, warnings=warns or [])
     except Exception as e:
         return jsonify(ok=False, error=f"Restore gagal: {e}"), 500
     finally:
         if src:
             src.close()
         if os.path.exists(tmp):
-            os.remove(tmp)
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+        _restore_lock.release()
 
 def daily_backup(keep=30):
     os.makedirs(BACKUP_DIR, exist_ok=True)
     p = os.path.join(BACKUP_DIR, f"inventory-{dt.date.today():%Y%m%d}.db")
     if not os.path.exists(p) and os.path.exists(DB_PATH):
-        src = sqlite3.connect(DB_PATH); dst = sqlite3.connect(p)
-        src.backup(dst); dst.close(); src.close()
-    files = sorted(f for f in os.listdir(BACKUP_DIR) if f.startswith("inventory-"))
-    for old in files[:-keep]:
-        os.remove(os.path.join(BACKUP_DIR, old))
+        snapshot_db(p)
+    prune_backups("inventory-", keep)
 
 # --------------------------------------------------------------------------
 # Halaman

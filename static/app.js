@@ -157,15 +157,26 @@ function makeNotifier(el) {
 }
 function ioTools(key, onDone, notify, impBox, hideTemplate) {
   const file = h('input', { type: 'file', accept: '.xlsx', style: 'display:none' });
+  let busy = false;  // cegah import ganda (klik/pilih file dua kali) yang menggandakan data
   file.onchange = async () => {
-    if (!file.files[0]) return;
+    if (!file.files[0] || busy) return;
+    busy = true;
     const fd = new FormData(); fd.append('file', file.files[0]);
-    const res = await fetch('/import/' + key, { method: 'POST', body: fd });
-    const r = await res.json(); file.value = ''; impBox.innerHTML = '';
-    if (!res.ok) { notify(r.errors.map(e => e.msg).join('\n'), 'err'); return; }
-    notify(`Import selesai: ${r.inserted} ${r.unit} masuk, ${r.error_count} ditolak.`, r.error_count ? 'warn' : 'ok', true);
-    for (const e of r.errors) impBox.append(h('div', {}, `Baris Excel ${e.row}: ${e.msg}`));
-    onDone();
+    try {
+      const res = await fetch('/import/' + key, { method: 'POST', body: fd });
+      let r; try { r = await res.json(); } catch (_) { r = null; }
+      impBox.innerHTML = '';
+      if (!r) { notify('Import gagal (respon server tidak valid, HTTP ' + res.status + ').', 'err'); return; }
+      if (!res.ok) { notify((r.errors || [{ msg: r.error || 'Import gagal' }]).map(e => e.msg).join('\n'), 'err'); return; }
+      const dup = r.duplicates ? `, ${r.duplicates} dilewati (sudah ada)` : '';
+      notify(`Import selesai: ${r.inserted} ${r.unit} masuk${dup}, ${r.error_count} ditolak.`, r.error_count ? 'warn' : 'ok', true);
+      for (const e of r.errors) impBox.append(h('div', {}, `Baris Excel ${e.row}: ${e.msg}`));
+      onDone();
+    } catch (err) {
+      notify('Import gagal: ' + err, 'err');
+    } finally {
+      file.value = ''; busy = false;
+    }
   };
   const exp = h('a', { class: 'btn', href: '#' }, 'Export Excel');
   return {
@@ -920,13 +931,15 @@ class DocPage {
     if (!confirm(`PULIHKAN DATABASE dari "${f.name}"?\n\nSeluruh data saat ini akan DIGANTI dengan isi file ini. ` +
       `Data saat ini otomatis dicadangkan dulu di folder backup (pra-restore-...).`)) return;
     const fd = new FormData(); fd.append('file', f);
-    btn.textContent = 'Memulihkan…';
+    if (btn.dataset.busy) return;
+    btn.dataset.busy = '1'; btn.textContent = 'Memulihkan…';
     try {
       const res = await fetch('/restore', { method: 'POST', body: fd });
       const r = await res.json();
-      if (!res.ok || !r.ok) { alert(r.error || 'Restore gagal'); btn.textContent = 'Restore DB'; return; }
-      alert(`Database berhasil dipulihkan.\nData sebelumnya disimpan sebagai backup/${r.pra}.`);
+      if (!res.ok || !r.ok) { alert(r.error || 'Restore gagal'); btn.textContent = 'Restore DB'; delete btn.dataset.busy; return; }
+      alert('Database berhasil dipulihkan.' + (r.pra ? `\nData sebelumnya disimpan sebagai backup/${r.pra}.` : '') +
+        (r.warnings && r.warnings.length ? '\n\nPeringatan:\n' + r.warnings.join('\n') : ''));
       location.reload();
-    } catch (err) { alert('Restore gagal: ' + err); btn.textContent = 'Restore DB'; }
+    } catch (err) { alert('Restore gagal: ' + err); btn.textContent = 'Restore DB'; delete btn.dataset.busy; }
   });
 })();

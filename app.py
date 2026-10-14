@@ -184,11 +184,13 @@ REFS = {  # sumber dropdown: (tabel, kolom nilai)
     "jenis": ("ref_jenis", "nama"), "ket": ("ref_ket", "nama"), "dept": ("ref_dept", "nama"),
     "ketprod": ("ref_ketprod", "nama"), "pengrajin": ("ref_pengrajin", "nama"),
     "karyawan": ("ref_karyawan", "nama"), "motif": ("ref_motif", "kode_motif"),
+    "kolom_prod": ("ref_kolom_prod", "nama"),
 }
 # tabel/kolom yang memakai master (untuk mencegah hapus master yang masih dipakai)
 USAGE = {
     "jenis": [("ref_motif", "jenis_id")],
-    "ket": [("dokumen_item", "ket_id")], "dept": [("dokumen", "dept_id")],
+    "ket": [("dokumen_item", "ket_id"), ("map_keluar", "ket_id"), ("map_balik", "ket_keluar_id"), ("map_balik", "ket_masuk_id")],
+    "dept": [("dokumen", "dept_id")],
     "ketprod": [("produksi", "ket_id")], "pengrajin": [("dokumen", "pengrajin_id")],
     "karyawan": [("produksi", "nama_id"), ("produksi", "pasangan_id")],
     "motif": [("produksi", "kode_motif_id"), ("dokumen_item", "motif_id"), ("opening", "kode_motif_id"), ("opening_prod", "kode_motif_id")],
@@ -221,6 +223,14 @@ SPECS = {
     "kolom_prod": dict(table="ref_kolom_prod", title="Kolom Produksi", color="4472C4",
                     cols=[C("nama", "Judul Kolom", req=1, uniq=1),
                           C("kode", "Nama Kolom di DB", ro=1)]),
+    # Rekap realtime Produksi: kolom produksi mana dikurangi oleh Ket Barang Keluar mana (1 Ket hanya milik 1 kolom).
+    "map_keluar": dict(table="map_keluar", title="Pemetaan Produksi → Keluar", color="7030A0",
+                       cols=[C("kolom", "Kolom Produksi", "ref", src="kolom_prod", req=1),
+                             C("ket", "Ket Barang Keluar", "ref", src="ket", req=1, uniq=1)]),
+    # Stok Pengrajin: Ket saat barang kembali (masuk) bisa beda dari Ket saat dikirim (keluar), mis. Belum Neci -> Sudah Neci.
+    "map_balik": dict(table="map_balik", title="Pemetaan Keluar → Masuk (Pengrajin)", color="7030A0",
+                      cols=[C("ket_keluar", "Ket Keluar (dikirim)", "ref", src="ket", req=1),
+                            C("ket_masuk", "Ket Masuk (kembali)", "ref", src="ket", req=1, uniq=1)]),
     "opening_prod": dict(table="opening_prod", title="Stok Awal Produksi", color="4472C4",
                     joins=["LEFT JOIN ref_jenis rj ON rj.id=r_kode_motif.jenis_id"],
                     cols=[C("kode_motif", "Kode Motif", "ref", src="motif", req=1, uniq=1),
@@ -385,6 +395,7 @@ def init_db():
         import_old(db, old)
     else:
         seed(db)
+    seed_map_keluar(db)
     if opening_migrated:
         for jid, jml, tgl in db.execute("SELECT jenis_id, jumlah, tanggal_mulai FROM opening_lama").fetchall():
             opening_to_motif(db, jid, jml, tgl)
@@ -392,6 +403,25 @@ def init_db():
     db.commit()
     db.close()
     return warns
+
+def seed_map_keluar(db):
+    """Isi awal pemetaan Kolom Produksi -> Ket Keluar, sekali per kolom: Ket yang namanya sama dengan kolom
+    ('Wadimor') atau 'Belum <kolom>' ('Belum Neci'). Selanjutnya bebas diubah di DB > Pemetaan Produksi → Keluar."""
+    r = db.execute("SELECT v FROM settings WHERE k='map_keluar_seeded'").fetchone()
+    try:
+        done = set(json.loads(r[0])) if r else set()
+    except ValueError:
+        done = set()
+    new = False
+    for kid, kode, nama in db.execute("SELECT id, kode, nama FROM ref_kolom_prod").fetchall():
+        if kode in done:
+            continue
+        for ket in db.execute("SELECT id FROM ref_ket WHERE lower(nama) IN (?,?)", (nama.lower(), "belum " + nama.lower())).fetchall():
+            if not db.execute("SELECT 1 FROM map_keluar WHERE ket_id=?", (ket[0],)).fetchone():
+                db.execute("INSERT INTO map_keluar(kolom_id,ket_id) VALUES(?,?)", (kid, ket[0]))
+        done.add(kode); new = True
+    if new:
+        db.execute("INSERT OR REPLACE INTO settings(k,v) VALUES('map_keluar_seeded',?)", (json.dumps(sorted(done)),))
 
 # Keunikan master di level database (bukan hanya di aplikasi) supaya import/restore/klik ganda tidak bisa membuat duplikat.
 UNIQUE_MASTER = [("ref_motif", "lower(kode_motif)"), ("ref_jenis", "lower(nama)"), ("ref_ket", "lower(nama)"),
@@ -981,6 +1011,7 @@ def save(key, rid=None):
 def ensure_cat_columns_after(db):
     reload_cats(db)
     ensure_cat_columns(db)
+    seed_map_keluar(db)
 
 @app.post("/api/<key>")
 def api_create(key):
@@ -1006,6 +1037,7 @@ def api_delete(key, rid):
         if used:
             return jsonify(ok=False, errors=[f"Tidak bisa dihapus: kolom ini masih berisi angka di {used} data produksi/stok awal. "
                                               "Kosongkan (0) dulu atau ubah judulnya saja."]), 409
+        db.execute("DELETE FROM map_keluar WHERE kolom_id=?", (rid,))
         db.execute("DELETE FROM ref_kolom_prod WHERE id=?", (rid,))
         for t in ("produksi", "opening_prod"):
             try:
@@ -1495,6 +1527,129 @@ def api_rekap_lines(name):
     label, rows = rekap_lines_data(get_db(), arah, f, t, request.args.get("by", "tanggal"))
     return jsonify(rows=rows, label=label)
 
+
+# --------------------------------------------------------------------------
+# Rekap Produksi realtime: produksi per kolom dikurangi Barang Keluar (Ket yang dipetakan ke kolom itu)
+#   misal Neci: produksi 9, keluar 9 (Ket "Belum Neci") -> sisa 0; yang kembali sebagai "Sudah Neci" masuk lewat Barang Masuk.
+# --------------------------------------------------------------------------
+def live_data(db, t, by="motif", q=""):
+    """Per Kode Motif (atau Jenis): Produksi (stok awal produksi + produksi s/d tanggal t), Keluar (Barang Keluar ber-Ket
+    yang dipetakan ke kolom itu) dan Sisa = Produksi - Keluar, untuk tiap kolom produksi. Seperti Laporan Stok, hanya
+    transaksi sejak 'Berlaku Mulai Tanggal' Stok Awal Produksi motif itu yang dihitung."""
+    motifs = {r["id"]: (r["kode_motif"], r["nama_motif"], r["jenis"] or "") for r in db.execute(
+        """SELECT m.id, m.kode_motif, m.nama_motif, j.nama jenis FROM ref_motif m LEFT JOIN ref_jenis j ON j.id=m.jenis_id""")}
+    prod = {}   # motif_id -> {kolom: jumlah}
+    def add(mid, c, v):
+        prod.setdefault(mid, {}).setdefault(c, [0, 0])[0] += v or 0
+    for r in db.execute("SELECT * FROM opening_prod"):
+        if not r["tanggal_mulai"] or t >= r["tanggal_mulai"]:
+            for c in CATS:
+                add(r["kode_motif_id"], c, r[c])
+    sums = ",".join(f"SUM(t.{c}) {c}" for c in CATS)
+    for r in db.execute(f"""SELECT t.kode_motif_id mid, {sums} FROM produksi t
+            LEFT JOIN opening_prod o ON o.kode_motif_id=t.kode_motif_id
+            WHERE t.kode_motif_id IS NOT NULL AND t.tgl_produksi<=? AND t.tgl_produksi>=COALESCE(o.tanggal_mulai,'')
+            GROUP BY t.kode_motif_id""", (t,)):
+        for c in CATS:
+            add(r["mid"], c, r[c])
+    kolom_of = {r["ket_id"]: r["kode"] for r in db.execute(
+        "SELECT m.ket_id, k.kode FROM map_keluar m JOIN ref_kolom_prod k ON k.id=m.kolom_id")}
+    for r in db.execute("""SELECT i.motif_id mid, i.ket_id kid, SUM(i.jumlah) jml FROM dokumen_item i
+            JOIN dokumen d ON d.id=i.dokumen_id LEFT JOIN opening_prod o ON o.kode_motif_id=i.motif_id
+            WHERE d.arah='K' AND d.tanggal<=? AND d.tanggal>=COALESCE(o.tanggal_mulai,'')
+            GROUP BY i.motif_id, i.ket_id""", (t,)):
+        c = kolom_of.get(r["kid"])
+        if c in CATS:
+            prod.setdefault(r["mid"], {}).setdefault(c, [0, 0])[1] += r["jml"] or 0
+    groups = {}  # kunci baris -> {kolom: [produksi, keluar]}
+    for mid, cols in prod.items():
+        kode, nama, jenis = motifs.get(mid, (f"#{mid}", "", ""))
+        key = (jenis, "", "") if by == "jenis" else (jenis, kode, nama)
+        g = groups.setdefault(key, {})
+        for c, (p_, k_) in cols.items():
+            cur = g.setdefault(c, [0, 0]); cur[0] += p_; cur[1] += k_
+    q = (q or "").strip().lower()
+    rows = []
+    for (jenis, kode, nama), cols in sorted(groups.items()):
+        if q and q not in f"{jenis} {kode} {nama}".lower():
+            continue
+        cells = {c: dict(p=cols.get(c, [0, 0])[0], k=cols.get(c, [0, 0])[1]) for c in CATS}
+        if not any(v["p"] or v["k"] for v in cells.values()):
+            continue
+        for v in cells.values():
+            v["s"] = v["p"] - v["k"]
+        rows.append(dict(kode_motif=kode, motif=nama, jenis=jenis, cells=cells,
+                         p=sum(v["p"] for v in cells.values()), k=sum(v["k"] for v in cells.values()),
+                         s=sum(v["s"] for v in cells.values())))
+    if rows:
+        tc = {c: dict(p=sum(r["cells"][c]["p"] for r in rows), k=sum(r["cells"][c]["k"] for r in rows),
+                      s=sum(r["cells"][c]["s"] for r in rows)) for c in CATS}
+        rows.append(dict(kode_motif="TOTAL", motif="", jenis="", total=True, cells=tc,
+                         p=sum(v["p"] for v in tc.values()), k=sum(v["k"] for v in tc.values()), s=sum(v["s"] for v in tc.values())))
+    return rows
+
+@app.get("/api/produksi_live")
+def api_produksi_live():
+    t = parse_date(request.args.get("to")) or dt.date.today().isoformat()
+    by = request.args.get("by", "motif")
+    db = get_db()
+    rows = live_data(db, t, by, request.args.get("q"))
+    unmapped = [r["nama"] for r in db.execute(
+        """SELECT k.nama FROM ref_kolom_prod k WHERE NOT EXISTS (SELECT 1 FROM map_keluar m WHERE m.kolom_id=k.id) ORDER BY k.id""")]
+    return jsonify(rows=rows, cats=CATS, labels=LABELS, to=t, by=by, unmapped=unmapped)
+
+# --------------------------------------------------------------------------
+# Stok Pengrajin: barang yang masih ada di pengrajin = total Barang Keluar ke pengrajin itu - Barang Masuk darinya,
+#   per Motif dan Ket (Ket saat kembali bisa dipetakan ke Ket saat dikirim: DB > Pemetaan Keluar → Masuk).
+# --------------------------------------------------------------------------
+def pengrajin_stok(db, t, q="", pengrajin="", show_all=False):
+    back = {r["km"]: r["kk"] for r in db.execute("SELECT ket_masuk_id km, ket_keluar_id kk FROM map_balik")}
+    agg = {}
+    for r in db.execute("""SELECT d.arah, d.pengrajin_id pid, i.motif_id mid, i.ket_id kid, SUM(i.jumlah) jml
+            FROM dokumen_item i JOIN dokumen d ON d.id=i.dokumen_id
+            WHERE d.pengrajin_id IS NOT NULL AND d.tanggal<=? GROUP BY d.arah, d.pengrajin_id, i.motif_id, i.ket_id""", (t,)):
+        kid = back.get(r["kid"], r["kid"]) if r["arah"] == "M" else r["kid"]
+        a = agg.setdefault((r["pid"], r["mid"], kid), [0, 0])
+        a[0 if r["arah"] == "K" else 1] += r["jml"] or 0
+    peng = {r["id"]: r["nama"] for r in db.execute("SELECT id, nama FROM ref_pengrajin")}
+    mot = {r["id"]: (r["kode_motif"], r["nama_motif"]) for r in db.execute("SELECT id, kode_motif, nama_motif FROM ref_motif")}
+    ket = {r["id"]: r["nama"] for r in db.execute("SELECT id, nama FROM ref_ket")}
+    q = (q or "").strip().lower()
+    items = []
+    for (pid, mid, kid), (kel, mas) in agg.items():
+        row = dict(pengrajin=peng.get(pid, "?"), kode_motif=mot.get(mid, ("?", ""))[0], motif=mot.get(mid, ("", ""))[1],
+                   ket=ket.get(kid, "?"), keluar=kel, masuk=mas, stok=kel - mas)
+        if pengrajin and row["pengrajin"] != pengrajin:
+            continue
+        if q and q not in f"{row['pengrajin']} {row['kode_motif']} {row['motif']} {row['ket']}".lower():
+            continue
+        if not show_all and row["stok"] == 0:
+            continue
+        items.append(row)
+    items.sort(key=lambda r: (r["pengrajin"].lower(), r["kode_motif"], r["ket"].lower()))
+    out, cur, sub = [], None, None
+    def close():
+        if sub is not None and cur is not None:
+            out.append(dict(pengrajin=cur, kode_motif="", motif="", ket="", total=True, **sub))
+    for r in items:
+        if r["pengrajin"] != cur:
+            close(); cur, sub = r["pengrajin"], dict(keluar=0, masuk=0, stok=0)
+        out.append(r)
+        for k in ("keluar", "masuk", "stok"):
+            sub[k] += r[k]
+    close()
+    if items:
+        out.append(dict(pengrajin="TOTAL", kode_motif="", motif="", ket="", total=True, grand=True,
+                        keluar=sum(r["keluar"] for r in items), masuk=sum(r["masuk"] for r in items),
+                        stok=sum(r["stok"] for r in items)))
+    return out
+
+@app.get("/api/pengrajin_stok")
+def api_pengrajin_stok():
+    t = parse_date(request.args.get("to")) or dt.date.today().isoformat()
+    rows = pengrajin_stok(get_db(), t, request.args.get("q"), request.args.get("pengrajin", ""), request.args.get("all") == "1")
+    return jsonify(rows=rows, to=t)
+
 # --------------------------------------------------------------------------
 # Excel
 # --------------------------------------------------------------------------
@@ -1542,6 +1697,10 @@ def export_key(key):
         return export_stok()
     if key == "rekap":
         return export_rekap(request.args.get("arah"))
+    if key == "produksi_live":
+        return export_live()
+    if key == "pengrajin_stok":
+        return export_pengrajin_stok()
     if key in ARAH:
         return export_lines(key)
     s = spec_or_404(key)
@@ -1652,6 +1811,50 @@ def export_rekap(name=None):
     ws.freeze_panes = "B2"
     return send_wb(wb, f"rekap_produksi_{f}_{t}.xlsx")
 
+def export_live():
+    t = parse_date(request.args.get("to")) or dt.date.today().isoformat()
+    by = request.args.get("by", "motif")
+    rows = live_data(get_db(), t, by, request.args.get("q"))
+    wb = Workbook(); ws = wb.active; ws.title = "Rekap Realtime"
+    labels = ["Motif" if by != "jenis" else "Jenis"] + ([] if by == "jenis" else ["Jenis"])
+    for c in CATS:
+        labels += [f"{LABELS[c]} Produksi", f"{LABELS[c]} Keluar", f"{LABELS[c]} Sisa"]
+    labels += ["Total Sisa"]
+    hdr(ws, 1, labels, ["4472C4"] * len(labels))
+    for r in rows:
+        first = r["jenis"] if by == "jenis" else (r["kode_motif"] if r.get("total") else f"{r['kode_motif']} - {r['motif']}")
+        line = [first] + ([] if by == "jenis" else [r["jenis"]])
+        for c in CATS:
+            v = r["cells"][c]; line += [v["p"], v["k"], v["s"]]
+        ws.append(line + [r["s"]])
+        for i in range(1, len(line) + 2):
+            cell = ws.cell(row=ws.max_row, column=i); cell.border = BORDER
+            if i > (1 if by == "jenis" else 2):
+                cell.number_format = NUM_FMT
+            if r.get("total"):
+                cell.font = Font(bold=True); cell.fill = PatternFill("solid", fgColor="D9E1F2")
+    widths(ws, [34] + [12] * (len(labels) - 1))
+    ws.freeze_panes = "B2"
+    return send_wb(wb, f"rekap_realtime_{t}.xlsx")
+
+def export_pengrajin_stok():
+    t = parse_date(request.args.get("to")) or dt.date.today().isoformat()
+    rows = pengrajin_stok(get_db(), t, request.args.get("q"), request.args.get("pengrajin", ""), request.args.get("all") == "1")
+    wb = Workbook(); ws = wb.active; ws.title = "Stok Pengrajin"
+    labels = ["Pengrajin", "Kode Motif", "Motif", "Ket", "Keluar (dikirim)", "Masuk (kembali)", "Stok di Pengrajin"]
+    hdr(ws, 1, labels, ["70AD47"] * len(labels))
+    for r in rows:
+        ws.append([r["pengrajin"], r["kode_motif"], r["motif"], "TOTAL" if r.get("total") else r["ket"], r["keluar"], r["masuk"], r["stok"]])
+        for i in range(1, 8):
+            c = ws.cell(row=ws.max_row, column=i); c.border = BORDER
+            if i >= 5:
+                c.number_format = NUM_FMT
+            if r.get("total"):
+                c.font = Font(bold=True); c.fill = PatternFill("solid", fgColor="D9E1F2")
+    widths(ws, [24, 14, 28, 26, 16, 16, 18])
+    ws.freeze_panes = "A2"
+    return send_wb(wb, f"stok_pengrajin_{t}.xlsx")
+
 DOC_IN = [("sstb", "SSTB", []), ("tanggal", "Tanggal", []), ("dept", "Dept", []),
           ("kode_motif", "Kode Motif", ["kode"]), ("jumlah", "Jumlah", []), ("ket", "Ket", []),
           ("pengrajin", "Nama Pengrajin", ["pengrajin"])]
@@ -1743,42 +1946,104 @@ def import_xlsx(key):
     return jsonify(ok=True, inserted=ok, duplicates=dup, unit="baris", errors=errors[:200], error_count=len(errors))
 
 def import_docs(db, name):
+    """Import Barang Masuk/Keluar. Satu SSTB boleh berisi banyak motif (baris dengan SSTB sama dikelompokkan).
+    - SSTB belum ada di database  -> dibuat baru.
+    - SSTB SUDAH ada di database  -> baris yang motif+ket-nya belum ada DITAMBAHKAN ke SSTB itu (motif A sudah masuk,
+      motif B menyusul lewat file lain); baris yang sama persis dilewati, jadi import ulang file yang sama aman.
+    - Sel SSTB (juga Tanggal/Dept/Pengrajin) yang dikosongkan di baris lanjutan ikut baris di atasnya,
+      seperti file Excel yang hanya mengisi SSTB di baris pertama."""
     arah = ARAH[name]
     rows, err = read_sheet(request.files.get("file"), DOC_IN)
     if err:
         return err
-    groups, errors = {}, []
+    groups, errors, last = {}, [], None
     for rn, row in rows:
         sstb = text_of(row.get("sstb"))
+        if not sstb and last and text_of(row.get("kode_motif")):
+            sstb = last  # SSTB dikosongkan: ikut SSTB baris sebelumnya
         if not sstb:
             errors.append({"row": rn, "msg": "SSTB kosong"}); continue
+        last = sstb
         gk = sstb.lower()  # SSTB tidak peka huruf besar/kecil (sama seperti validasi di DB)
         g = groups.get(gk)
         if g is None:
             g = groups[gk] = dict(hdr=dict(sstb=sstb, tanggal=row.get("tanggal"), dept=row.get("dept"),
                                           pengrajin=row.get("pengrajin")), items=[], rows=[], seen=set())
-        elif parse_date(row.get("tanggal")) != parse_date(g["hdr"]["tanggal"]) or \
-                text_of(row.get("dept")).lower() != text_of(g["hdr"]["dept"]).lower() or \
-                text_of(row.get("pengrajin")).lower() != text_of(g["hdr"]["pengrajin"]).lower():
-            errors.append({"row": rn, "msg": f"SSTB {sstb}: Tanggal/Dept/Pengrajin berbeda dari baris pertama SSTB ini"}); continue
+        else:
+            h0 = g["hdr"]
+            for f in ("tanggal", "dept", "pengrajin"):  # header yang kosong di baris pertama diisi dari baris lanjutan
+                if text_of(h0[f]) == "" and text_of(row.get(f)) != "":
+                    h0[f] = row.get(f)
+            # kolom header yang dikosongkan di baris lanjutan = ikut baris pertama; yang diisi harus sama
+            if (text_of(row.get("tanggal")) != "" and parse_date(row.get("tanggal")) != parse_date(h0["tanggal"])) or \
+                    (text_of(row.get("dept")) != "" and text_of(row.get("dept")).lower() != text_of(h0["dept"]).lower()) or \
+                    (text_of(row.get("pengrajin")) != "" and text_of(row.get("pengrajin")).lower() != text_of(h0["pengrajin"]).lower()):
+                errors.append({"row": rn, "msg": f"SSTB {sstb}: Tanggal/Dept/Pengrajin berbeda dari baris pertama SSTB ini"}); continue
         lk = (text_of(row.get("kode_motif")).lower(), text_of(row.get("ket")).lower())
         if lk in g["seen"]:  # baris ganda (Kode Motif + Ket sama) di SSTB yang sama: tidak dijumlahkan diam-diam
             errors.append({"row": rn, "msg": f"SSTB {sstb}: baris ganda (Kode Motif + Ket sama), dilewati"}); continue
         g["seen"].add(lk)
         g["items"].append(dict(kode_motif=row.get("kode_motif"), ket=row.get("ket"), jumlah=row.get("jumlah")))
         g["rows"].append(rn)
-    n_doc = 0
+    n_new = n_app = n_dup = 0
     for g in groups.values():
         sstb = g["hdr"]["sstb"]
-        c, errs, _ = validate_doc(db, arah, dict(g["hdr"], items=g["items"]))
+        ex = db.execute("""SELECT d.id, d.tanggal, dp.nama dept, pg.nama pengrajin FROM dokumen d
+            JOIN ref_dept dp ON dp.id=d.dept_id LEFT JOIN ref_pengrajin pg ON pg.id=d.pengrajin_id
+            WHERE d.arah=? AND lower(d.sstb)=lower(?)""", (arah, sstb)).fetchone()
+        if ex is None:  # SSTB baru
+            c, errs, _ = validate_doc(db, arah, dict(g["hdr"], items=g["items"]))
+            if errs:
+                for i, msg in errs:
+                    errors.append({"row": g["rows"][i] if i is not None else g["rows"][0], "msg": f"SSTB {sstb}: {msg}"})
+                continue
+            insert_doc(db, arah, c)
+            n_new += 1
+            continue
+        # SSTB sudah ada: tambahkan hanya baris (motif+ket) yang belum ada
+        h0 = g["hdr"]
+        th, dh, ph = parse_date(h0["tanggal"]), text_of(h0["dept"]), text_of(h0["pengrajin"])
+        if (th and th != ex["tanggal"]) or (dh and dh.lower() != ex["dept"].lower()) or \
+                (ph and ph.lower() != (ex["pengrajin"] or "").lower()):
+            errors.append({"row": g["rows"][0], "msg": f"SSTB {sstb} sudah ada dengan Tanggal {dmy(ex['tanggal'])}, Dept {ex['dept']}"
+                           f"{', Pengrajin ' + ex['pengrajin'] if ex['pengrajin'] else ''}; header di file berbeda. "
+                           "Samakan header-nya atau ubah lewat tombol Edit."})
+            continue
+        have = {}
+        for r in db.execute("""SELECT lower(m.kode_motif) km, lower(k.nama) kt, i.jumlah FROM dokumen_item i
+                JOIN ref_motif m ON m.id=i.motif_id JOIN ref_ket k ON k.id=i.ket_id WHERE i.dokumen_id=?""", (ex["id"],)):
+            have.setdefault((r["km"], r["kt"]), set()).add(r["jumlah"])
+        new_items, new_rows = [], []
+        for it, rn in zip(g["items"], g["rows"]):
+            key = (text_of(it["kode_motif"]).lower(), text_of(it["ket"]).lower())
+            if key in have:
+                if parse_int(it["jumlah"]) in have[key]:
+                    n_dup += 1  # sudah ada persis sama: dilewati (import ulang tidak menggandakan)
+                else:
+                    errors.append({"row": rn, "msg": f"SSTB {sstb}: Kode Motif + Ket ini sudah ada di SSTB dengan jumlah "
+                                   f"{fmt_id(sorted(have[key])[0])}; tidak ditimpa. Ubah lewat tombol Edit."})
+                continue
+            new_items.append(it); new_rows.append(rn)
+        if not new_items:
+            continue
+        old = [dict(kode_motif=r["kode_motif"], ket=r["ket"], jumlah=r["jumlah"]) for r in db.execute(
+            """SELECT m.kode_motif, k.nama ket, i.jumlah FROM dokumen_item i JOIN ref_motif m ON m.id=i.motif_id
+               JOIN ref_ket k ON k.id=i.ket_id WHERE i.dokumen_id=? ORDER BY i.id""", (ex["id"],))]
+        # validasi seluruh isi SSTB (baris lama + baru) supaya cek stok Barang Keluar memakai total yang benar
+        c, errs, _ = validate_doc(db, arah, dict(sstb=sstb, tanggal=ex["tanggal"], dept=ex["dept"],
+                                                 pengrajin=ex["pengrajin"], items=old + new_items), ex["id"])
         if errs:
             for i, msg in errs:
-                errors.append({"row": g["rows"][i] if i is not None else g["rows"][0], "msg": f"SSTB {sstb}: {msg}"})
+                errors.append({"row": new_rows[i - len(old)] if i is not None and i >= len(old) else new_rows[0],
+                               "msg": f"SSTB {sstb}: {msg}"})
             continue
-        insert_doc(db, arah, c)
-        n_doc += 1
+        db.executemany("INSERT INTO dokumen_item(dokumen_id,motif_id,ket_id,jumlah,link_produksi_id) VALUES(?,?,?,?,?)",
+                       [(ex["id"], x["motif_id"], x["ket_id"], x["jumlah"], x.get("link_produksi_id"))
+                        for x in c["items"][len(old):]])
+        n_app += 1
     db.commit()
-    return jsonify(ok=True, inserted=n_doc, unit="SSTB", errors=errors[:200], error_count=len(errors))
+    return jsonify(ok=True, inserted=n_new, appended=n_app, duplicates=n_dup, unit="SSTB baru",
+                   errors=errors[:200], error_count=len(errors))
 
 # --------------------------------------------------------------------------
 # Backup
@@ -1888,7 +2153,7 @@ def home():
 
 @app.get("/db")
 def page_db():
-    tabs = [(k, SPECS[k]["title"]) for k in ("motif", "jenis", "opening", "kolom_prod", "opening_prod", "ket", "dept", "ketprod", "pengrajin", "karyawan")]
+    tabs = [(k, SPECS[k]["title"]) for k in ("motif", "jenis", "opening", "kolom_prod", "opening_prod", "ket", "map_keluar", "map_balik", "dept", "ketprod", "pengrajin", "karyawan")]
     return render_template("db.html", tabs=tabs, title="DB (Master Data)")
 
 @app.get("/<key>")

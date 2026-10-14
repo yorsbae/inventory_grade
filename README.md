@@ -36,6 +36,22 @@ Urutan halaman: **DB → Barang Masuk → Produksi → Barang Keluar → Laporan
 - Setiap SSTB hanya tampil **sekali** di daftar; motif A, B, C-nya ditumpuk sejajar dalam baris itu, dengan Total SSTB di bawah kolom Jumlah. Edit / Cetak / Hapus bekerja untuk seluruh SSTB.
 - Pencarian, Filter, Urutkan, Kelompokkan, dan paging menghitung per SSTB (Filter motif = tampilkan SSTB yang memuat motif itu). Export Excel tetap datar (satu baris per barang) agar bisa di-import kembali.
 
+## Import Barang Masuk/Keluar: 1 SSTB banyak motif
+- Baris dengan SSTB yang sama dalam satu file dikelompokkan jadi satu SSTB (motif A, B, C). Sel SSTB/Tanggal/Dept/Pengrajin boleh dikosongkan di baris lanjutan (ikut baris di atasnya).
+- Bila SSTB **sudah ada** di database, motif/Ket yang belum ada **ditambahkan** ke SSTB itu (tidak lagi ditolak "SSTB sudah ada"). Baris yang sama persis dilewati, sehingga import ulang file yang sama aman. Motif+Ket yang sudah ada dengan jumlah berbeda tidak ditimpa (dilaporkan; ubah lewat Edit).
+- Tanggal/Dept/Pengrajin di file harus sama dengan SSTB yang sudah tersimpan.
+
+## Produksi: dropdown tampilan + Rekap Realtime
+- Tombol Rekap / Daftar Input diganti **dropdown** dengan 3 pilihan: *Rekap*, *Daftar Input*, *Rekap Realtime (Sisa)*.
+- **Rekap Realtime** per Motif (atau Jenis) s/d tanggal tertentu: tiap kolom produksi menampilkan **sisa = produksi (+ Stok Awal Produksi) - Barang Keluar** yang Ket-nya dipetakan ke kolom itu (kecil: Produksi - Keluar). Contoh: produksi Neci 9, keluar 9 "Belum Neci" -> sisa 0; yang kembali sebagai "Sudah Neci" masuk lewat Barang Masuk.
+- Pemetaan kolom produksi <-> Ket keluar diatur di **DB > Pemetaan Produksi -> Keluar** (1 Ket hanya milik 1 kolom). Terisi otomatis untuk Ket yang namanya sama dengan kolom ("Wadimor") atau "Belum <kolom>" ("Belum Neci"); ubah/tambah sesuai kebutuhan. Kolom yang belum dipetakan tampil sisa = produksi.
+
+## Barang Keluar: Stok Pengrajin
+- Dropdown di halaman Barang Keluar: *Daftar Barang Keluar (SSTB)* atau *Stok Pengrajin*.
+- Stok pengrajin = total **keluar ke pengrajin** - total **masuk dari pengrajin**, per Pengrajin, Motif, dan Ket (contoh: keluar 600, masuk 500 -> stok 100). Ada subtotal per pengrajin, filter pengrajin/tanggal/cari, dan Export Excel. Merah = masuk melebihi keluar.
+- Bila Ket saat kembali berbeda (Belum Neci -> Sudah Neci), atur di **DB > Pemetaan Keluar -> Masuk (Pengrajin)** agar masuk "Sudah Neci" mengurangi stok "Belum Neci".
+- Barang Keluar/Masuk tanpa Nama Pengrajin tidak ikut dihitung.
+
 ## Login
 - Pertama kali dibuka dari komputer server (http://localhost:5000), aplikasi meminta pembuatan **username & password**. Komputer lain di jaringan tidak bisa membuat akun, dan baru bisa masuk setelah akun dibuat.
 - Menu **Ganti Password** dan **Keluar** ada di header. Sesi berlaku 7 hari; 5 kali salah password mengunci IP tersebut 60 detik.

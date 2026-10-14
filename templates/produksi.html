@@ -2,9 +2,9 @@
 {% block body %}
 <div class="toolbar">
  <button class="btn primary" id="add">+ Tambah Produksi</button>
- <label>Dari <input type="date" id="f"></label>
- <label>Sampai <input type="date" id="t"></label>
- <div class="seg" id="seg"><button data-v="rekap" class="on">Rekap</button><button data-v="daftar">Daftar Input</button></div>
+ <span id="ddslot"></span>
+ <label class="rangelab">Dari <input type="date" id="f"></label>
+ <label class="rangelab">Sampai <input type="date" id="t"></label>
  <label id="byw">Kelompokkan per <select id="by"><option value="tanggal">Tanggal</option><option value="nama">Nama karyawan</option>
   <option value="motif">Motif</option><option value="jenis">Jenis</option><option value="ket">Ket</option></select></label>
  <span class="grow"></span>
@@ -16,6 +16,19 @@
 </div>
 <div class="chips" id="pidnote" style="display:none"></div>
 <div id="listView" style="display:none"></div>
+<div id="liveView" style="display:none">
+ <div class="toolbar">
+  <label>Per tanggal <input type="date" id="lt"></label>
+  <label>Kelompokkan per <select id="lby"><option value="motif">Motif</option><option value="jenis">Jenis</option></select></label>
+  <label class="searchbox">Cari <input type="search" id="lq" placeholder="Cari motif / jenis…"></label>
+  <span class="grow"></span><a class="btn" id="lxl">Export Excel</a>
+ </div>
+ <p class="hint">Rekap realtime = produksi (+ Stok Awal Produksi) dikurangi Barang Keluar yang Ket-nya dipetakan ke kolom itu. Setiap sel: <b>sisa</b> (besar) dan
+  <i>Produksi − Keluar</i> (kecil). Contoh Neci: produksi 9, keluar 9 &ldquo;Belum Neci&rdquo; → sisa 0; yang kembali sebagai &ldquo;Sudah Neci&rdquo; dicatat di Barang Masuk.
+  Pemetaan kolom ↔ Ket diatur di <a class="lnk" href="/db">DB › Pemetaan Produksi → Keluar</a>. Merah = keluar melebihi produksi.</p>
+ <div class="chips" id="lchips"></div>
+ <div class="tablewrap"><table id="ltb"></table></div>
+</div>
 {% endblock %}
 {% block script %}<script>
 const $f=document.getElementById('f'),$t=document.getElementById('t'),$b=document.getElementById('by');
@@ -65,14 +78,42 @@ function setRange(){if(range.id)clearPid();if(!$f.value)$f.value=defaultFrom();i
  if($f.value>$t.value){if(document.activeElement===$f)$t.value=$f.value;else $f.value=$t.value;}
  range.from=$f.value;range.to=$t.value;crud.ready.then(()=>{crud.page=1;crud.load();});run();}
 $f.onchange=$t.onchange=setRange;$b.onchange=run;
-document.querySelectorAll('#seg button').forEach(b=>b.onclick=()=>{
- const v=b.dataset.v;document.querySelectorAll('#seg button').forEach(x=>x.classList.toggle('on',x===b));
- document.getElementById('rekapView').style.display=v==='rekap'?'':'none';
- document.getElementById('listView').style.display=v==='daftar'?'':'none';
- document.getElementById('byw').style.display=v==='rekap'?'':'none';
- document.getElementById('xl').style.display=v==='rekap'?'':'none';
- rekapCT.el.style.display=v==='rekap'?'':'none';});
+const liveCT=colToggle('live',()=>liveCT.apply(document.getElementById('ltb')));
+document.getElementById('lxl').before(liveCT.el);
+const $lt=document.getElementById('lt'),$lby=document.getElementById('lby'),$lq=document.getElementById('lq');
+$lt.value=todayISO();
+async function runLive(){
+ const q=new URLSearchParams({to:$lt.value||todayISO(),by:$lby.value,q:$lq.value.trim()});
+ document.getElementById('lxl').href='/export/produksi_live?'+q;
+ const r=await (await fetch('/api/produksi_live?'+q)).json();const tb=document.getElementById('ltb');tb.innerHTML='';
+ const byJ=r.by==='jenis';
+ const lab=c=>(r.labels&&r.labels[c])||c;
+ const cols=(byJ?[['Jenis','']]:[['Motif',''],['Jenis','']]).concat(r.cats.map(c=>[lab(c),'num']),[['Total Sisa','num']]);
+ tb.append(h('thead',{},h('tr',{},cols.map(([x,c])=>h('th',{class:c},x)))));
+ const body=h('tbody');
+ if(!r.rows.length)body.append(h('tr',{},h('td',{colspan:cols.length,class:'empty'},'Belum ada produksi / stok awal produksi sampai tanggal ini.')));
+ const cell=(v,l)=>h('td',{class:'num'+(v.s<0?' neg':''),'data-label':l},
+  (v.p||v.k)?[h('b',{},v.s===0?'0':fmtNum(v.s)),h('small',{class:'pk'},fmtNum(v.p).replace('-','0')+' − '+fmtNum(v.k).replace('-','0'))]:'');
+ for(const x of r.rows){
+  const first=x.total?[h('td',{colspan:byJ?1:2},h('b',{},'TOTAL'))]:byJ?[h('td',{},x.jenis||'-')]
+   :[h('td',{'data-label':'Motif'},h('b',{},x.kode_motif),h('small',{class:'deptbrk'},x.motif)),h('td',{'data-label':'Jenis'},x.jenis)];
+  body.append(h('tr',{class:x.total?'total':''},first,r.cats.map(c=>cell(x.cells[c],lab(c))),
+   h('td',{class:'num'+(x.s<0?' neg':''),'data-label':'Total Sisa'},h('b',{},x.s===0?'0':fmtNum(x.s)))));}
+ tb.append(body);
+ liveCT.setCols(cols.map(([x])=>({n:x,l:x})));liveCT.apply(tb);
+ const ch=document.getElementById('lchips');ch.innerHTML='';
+ if(r.unmapped&&r.unmapped.length)ch.append(h('span',{class:'chip'},'Belum dipetakan ke Ket keluar: '+r.unmapped.join(', ')+' (sisa = produksi)'));}
+$lt.onchange=$lby.onchange=runLive;
+let lqT;$lq.addEventListener('input',()=>{clearTimeout(lqT);lqT=setTimeout(runLive,300);});
+const VIEWS=[['rekap','Rekap'],['daftar','Daftar Input'],['live','Rekap Realtime (Sisa)']];
+const dd=viewDropdown(VIEWS,v=>{
+ const show=(id,on)=>document.getElementById(id).style.display=on?'':'none';
+ show('rekapView',v==='rekap');show('listView',v==='daftar');show('liveView',v==='live');
+ show('byw',v==='rekap');show('xl',v==='rekap');rekapCT.el.style.display=v==='rekap'?'':'none';
+ document.querySelectorAll('.rangelab').forEach(l=>l.style.display=v==='live'?'none':'');
+ if(v==='live')runLive();});
+document.getElementById('ddslot').append(dd.el);
 document.getElementById('add').onclick=()=>crud.ready.then(()=>crud.openForm());
 run();
-if(INIT.pid){showPid();document.querySelector('#seg button[data-v=daftar]').click();}
+if(INIT.pid){showPid();dd.set('daftar');}
 </script>{% endblock %}

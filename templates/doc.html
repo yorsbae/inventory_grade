@@ -1,4 +1,13 @@
 {% extends "base.html" %}
-{% block body %}<p class="hint">Satu SSTB bisa berisi beberapa motif (motif A, B, C…) dalam satu sesi: isi SSTB, tanggal, dept, pengrajin sekali, lalu tambahkan satu baris per motif (Ket otomatis mengikuti baris sebelumnya). Mengetik nomor SSTB yang sudah ada akan membuka SSTB itu agar tinggal menambah motif. Daftar dibatasi ke 7 hari terakhir dan 25 baris per halaman; ubah rentang tanggal di atas, atau buka tombol "🔍 Filter" untuk mencari, memfilter per field, mengurutkan, dan mengelompokkan data. "Cetak" pada tiap baris mencetak SSTB. Link Produksi (opsional) menandai barang keluar ini berasal dari input produksi yang mana.{% if arah == 'masuk' %} Kolom Keterangan Produksi menunjukkan berapa yang sudah dikerjakan di halaman Produksi (lewat Link Barang Masuk, per SSTB untuk semua motifnya) dan berapa sisanya.{% endif %}</p>
-<div id="doc"></div>{% endblock %}
-{% block script %}<script>new DocPage(document.getElementById('doc'), '{{ arah }}', {{ init|tojson }});</script>{% endblock %}
+{% block body %}<p class="hint" id="dochint">Satu SSTB bisa berisi beberapa motif (motif A, B, C…) dalam satu sesi: isi SSTB, tanggal, dept, pengrajin sekali, lalu tambahkan satu baris per motif (Ket otomatis mengikuti baris sebelumnya). Mengetik nomor SSTB yang sudah ada akan membuka SSTB itu agar tinggal menambah motif. Daftar dibatasi ke 7 hari terakhir dan 25 baris per halaman; ubah rentang tanggal di atas, atau buka tombol "🔍 Filter" untuk mencari, memfilter per field, mengurutkan, dan mengelompokkan data. "Cetak" pada tiap baris mencetak SSTB. Link Produksi (opsional) menandai barang keluar ini berasal dari input produksi yang mana.{% if arah == 'masuk' %} Kolom Keterangan Produksi menunjukkan berapa yang sudah dikerjakan di halaman Produksi (lewat Link Barang Masuk, per SSTB untuk semua motifnya) dan berapa sisanya.{% endif %}</p>
+{% if arah == 'keluar' %}<div class="toolbar"><span id="ddslot"></span></div>{% endif %}
+<div id="doc"></div>
+{% if arah == 'keluar' %}<div id="peng" style="display:none"></div>{% endif %}{% endblock %}
+{% block script %}<script>new DocPage(document.getElementById('doc'), '{{ arah }}', {{ init|tojson }});
+{% if arah == 'keluar' %}let pengStok=null;
+document.getElementById('ddslot').append(viewDropdown([['daftar','Daftar Barang Keluar (SSTB)'],['stok','Stok Pengrajin']],v=>{
+ document.getElementById('doc').style.display=v==='daftar'?'':'none';
+ document.getElementById('dochint').style.display=v==='daftar'?'':'none';
+ document.getElementById('peng').style.display=v==='stok'?'':'none';
+ if(v==='stok'){if(!pengStok)pengStok=new PengrajinStok(document.getElementById('peng'));else pengStok.load();}}).el);
+{% endif %}</script>{% endblock %}

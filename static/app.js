@@ -179,7 +179,8 @@ function ioTools(key, onDone, notify, impBox, hideTemplate) {
       if (!r) { notify('Import gagal (respon server tidak valid, HTTP ' + res.status + ').', 'err'); return; }
       if (!res.ok) { notify((r.errors || [{ msg: r.error || 'Import gagal' }]).map(e => e.msg).join('\n'), 'err'); return; }
       const dup = r.duplicates ? `, ${r.duplicates} dilewati (sudah ada)` : '';
-      notify(`Import selesai: ${r.inserted} ${r.unit} masuk${dup}, ${r.error_count} ditolak.`, r.error_count ? 'warn' : 'ok', true);
+      const app = r.appended ? `, ${r.appended} SSTB lama ditambah motif baru` : '';
+      notify(`Import selesai: ${r.inserted} ${r.unit} masuk${app}${dup}, ${r.error_count} ditolak.`, r.error_count ? 'warn' : 'ok', true);
       for (const e of r.errors) impBox.append(h('div', {}, `Baris Excel ${e.row}: ${e.msg}`));
       onDone();
     } catch (err) {
@@ -928,6 +929,82 @@ class DocPage {
     foot.push(h('button', { class: 'btn primary', onclick: () => send(false) }, docId ? 'Update' : 'Simpan'));
     const modal = openModal((docId ? 'Edit ' : 'Tambah ') + this.label + (docId ? ' — ' + doc.sstb : ''), body, foot);
     if (addMore && docId) addRow().motif.focus(); else (docId ? this.rows[0].motif : sstb).focus();
+  }
+}
+
+
+/* Tombol dropdown pemilih tampilan (mis. Rekap / Daftar Input / Rekap Realtime). items: [[nilai, label], ...] */
+function viewDropdown(items, onPick, initial) {
+  let cur = initial || items[0][0];
+  const btn = h('button', { type: 'button', class: 'btn viewbtn' });
+  const menu = h('div', { class: 'ddmenu' });
+  const el = h('div', { class: 'dd' }, btn, menu);
+  const label = () => { btn.textContent = (items.find(i => i[0] === cur) || items[0])[1] + ' ▾'; };
+  const set = (v, silent) => {
+    cur = v; label(); el.classList.remove('open');
+    [...menu.children].forEach(b => b.classList.toggle('on', b.dataset.v === v));
+    if (!silent) onPick(v);
+  };
+  for (const [v, l] of items) menu.append(h('button', { type: 'button', 'data-v': v, onclick: () => set(v) }, l));
+  btn.addEventListener('click', e => { e.stopPropagation(); el.classList.toggle('open'); });
+  document.addEventListener('click', e => { if (!el.contains(e.target)) el.classList.remove('open'); });
+  set(cur, true);
+  return { el, set, get value() { return cur; } };
+}
+
+/* Stok Pengrajin (halaman Barang Keluar): total dikirim ke pengrajin - total kembali (Barang Masuk), per Motif & Ket */
+class PengrajinStok {
+  constructor(root) {
+    this.root = root; this.st = { to: todayISO(), q: '', pengrajin: '', all: false }; this.build(); this.load();
+  }
+  params() {
+    const p = new URLSearchParams({ to: this.st.to });
+    if (this.st.q) p.set('q', this.st.q);
+    if (this.st.pengrajin) p.set('pengrajin', this.st.pengrajin);
+    if (this.st.all) p.set('all', '1');
+    return p;
+  }
+  build() {
+    const st = this.st;
+    const to = h('input', { type: 'date', value: st.to });
+    to.onchange = () => { st.to = to.value || todayISO(); this.load(); };
+    const q = h('input', { type: 'search', placeholder: 'Cari pengrajin, motif, ket…' });
+    let t; q.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => { st.q = q.value.trim(); this.load(); }, 300); });
+    const sel = h('select', {}, h('option', { value: '' }, 'Semua Pengrajin'));
+    sel.onchange = () => { st.pengrajin = sel.value; this.load(); };
+    catOptions('pengrajin').then(list => list.forEach(v => sel.append(h('option', { value: v }, v))));
+    const all = h('input', { type: 'checkbox' });
+    all.onchange = () => { st.all = all.checked; this.load(); };
+    this.exp = h('a', { class: 'btn' }, 'Export Excel');
+    this.table = h('table', { class: 'resp' });
+    this.chips = h('div', { class: 'chips' });
+    this.root.append(
+      h('div', { class: 'toolbar' }, h('label', {}, 'Per tanggal', to), h('label', {}, 'Pengrajin', sel),
+        h('label', { class: 'searchbox' }, 'Cari', q),
+        h('label', { class: 'colitem' }, all, 'Tampilkan stok 0'), h('span', { class: 'grow' }), this.exp),
+      h('p', { class: 'hint' }, 'Stok Pengrajin = jumlah Barang Keluar ke pengrajin itu dikurangi Barang Masuk darinya, per Motif dan Ket ' +
+        '(dihitung dari seluruh transaksi s/d tanggal di atas). Contoh: keluar 600, masuk 500 → stok di pengrajin 100. ' +
+        'Bila Ket saat kembali berbeda dari Ket saat dikirim (mis. Belum Neci → Sudah Neci), atur di DB › Pemetaan Keluar → Masuk. ' +
+        'Barang Keluar/Masuk tanpa Nama Pengrajin tidak ikut dihitung.'),
+      this.chips, h('div', { class: 'tablewrap' }, this.table));
+  }
+  async load() {
+    this.exp.href = '/export/pengrajin_stok?' + this.params();
+    const r = await (await fetch('/api/pengrajin_stok?' + this.params())).json();
+    const heads = [['Pengrajin', ''], ['Kode Motif', ''], ['Motif', ''], ['Ket', ''], ['Keluar (dikirim)', 'num'], ['Masuk (kembali)', 'num'], ['Stok di Pengrajin', 'num']];
+    const tb = this.table; tb.innerHTML = '';
+    tb.append(h('thead', {}, h('tr', {}, heads.map(([x, c]) => h('th', { class: c }, x)))));
+    const body = h('tbody');
+    if (!r.rows.length) body.append(h('tr', {}, h('td', { colspan: heads.length, class: 'empty' }, 'Tidak ada stok di pengrajin.')));
+    const neg = v => v < 0 ? 'num neg' : 'num';
+    for (const x of r.rows) {
+      body.append(h('tr', { class: x.total ? 'total' : '' },
+        h('td', { 'data-label': 'Pengrajin' }, x.grand ? 'TOTAL' : x.total ? 'Total ' + x.pengrajin : x.pengrajin),
+        h('td', { 'data-label': 'Kode Motif' }, x.kode_motif), h('td', { 'data-label': 'Motif' }, x.motif), h('td', { 'data-label': 'Ket' }, x.ket),
+        h('td', { class: 'num', 'data-label': 'Keluar' }, fmtNum(x.keluar)), h('td', { class: 'num', 'data-label': 'Masuk' }, fmtNum(x.masuk)),
+        h('td', { class: neg(x.stok), 'data-label': 'Stok' }, h('b', {}, fmtNum(x.stok)))));
+    }
+    tb.append(body);
   }
 }
 

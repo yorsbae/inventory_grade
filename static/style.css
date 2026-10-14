@@ -152,3 +152,14 @@ td.dl{line-height:26px;font-weight:600}
 .login-brand{font-weight:700;color:#1f3a5f;font-size:13px;margin-bottom:4px}
 .login-err{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;border-radius:7px;padding:8px 10px;margin-bottom:10px;font-size:13px}
 .login-ok{background:#f0fdf4;color:#166534;border:1px solid #bbf7d0;border-radius:7px;padding:8px 10px;margin-bottom:10px;font-size:13px}
+
+/* dropdown pemilih tampilan */
+.dd{position:relative}
+.dd .viewbtn{font-weight:600;color:#1f3a5f;border-color:#3b5f95;min-width:190px;text-align:left}
+.ddmenu{display:none;position:absolute;left:0;top:calc(100% + 4px);z-index:60;background:#fff;border:1px solid #b8c1d1;border-radius:8px;
+ box-shadow:0 8px 24px rgba(15,23,42,.18);min-width:100%;padding:4px 0}
+.dd.open .ddmenu{display:block}
+.ddmenu button{display:block;width:100%;text-align:left;border:0;background:none;padding:8px 14px;font:inherit;cursor:pointer;white-space:nowrap}
+.ddmenu button:hover{background:#eef2f8}.ddmenu button.on{background:#e8f0fe;font-weight:600}
+td.neg,td.neg b{color:#b91c1c}
+td small.pk{display:block;font-size:11px;color:#6b7280;font-weight:400}

@@ -1598,16 +1598,18 @@ def api_stok():
     cols, data = stock_view(get_db(), f, t, mode, by)
     return jsonify(rows=data, columns=[dict(k=k, l=l, t=ty) for k, l, ty in cols], **{"from": f, "to": t}, mode=mode, by=by)
 
-BY = {"tanggal": ("t.tgl_produksi", "Tanggal"), "nama": ("r_nama.nama", "Nama"), "jenis": ("rj.nama", "Jenis"),
+BY = {"tanggal": ("t.tgl_produksi", "Tanggal"), "tgl_masuk_sanggan": ("t.tgl_masuk_sanggan", "Tanggal Masuk Sanggan"), "nama": ("r_nama.nama", "Nama"), "jenis": ("rj.nama", "Jenis"),
       "motif": ("r_kode_motif.kode_motif || ' - ' || r_kode_motif.nama_motif", "Motif"),
       "ket": ("r_ket.nama", "Ket")}
 
 def rekap_data(db, f, t, by):
     expr, label = BY.get(by, BY["tanggal"])
+    # per Tanggal Masuk Sanggan: periode memfilter tanggal masuk sanggan (bukan tanggal produksi); input tanpa tanggal itu tidak ikut
+    dcol = "t.tgl_masuk_sanggan" if by == "tgl_masuk_sanggan" else "t.tgl_produksi"
     _, joins = select_parts("produksi")
     sums = ",".join(f"SUM(t.{c}) {c}" for c in CATS)
     rows = db.execute(f"""SELECT COALESCE({expr},'-') grp, COUNT(*) baris, {sums}, SUM({JUMLAH_EXPR}) jumlah
-                          FROM produksi t {joins} WHERE t.tgl_produksi>=? AND t.tgl_produksi<=?
+                          FROM produksi t {joins} WHERE {dcol}>=? AND {dcol}<=?
                           GROUP BY grp ORDER BY grp""", (f, t)).fetchall()
     rows = [dict(r) for r in rows]
     awal = {c: 0 for c in CATS}
@@ -1623,7 +1625,7 @@ def rekap_data(db, f, t, by):
         for c in CATS + ["jumlah"]:
             tot[c] = sum(r[c] or 0 for r in rows)
         rows.append(tot)
-        if awal["jumlah"]:  # tampilkan stok awal & saldo (stok awal + produksi periode ini)
+        if awal["jumlah"] and by != "tgl_masuk_sanggan":  # tampilkan stok awal & saldo (stok awal + produksi periode ini)
             rows.insert(0, dict(awal, grp="STOK AWAL", awal=True, baris=n_awal))
             rows.append(dict({c: awal[c] + tot[c] for c in CATS + ["jumlah"]}, grp="SALDO (Stok Awal + Produksi)",
                              total=True, saldo=True, baris=tot["baris"]))

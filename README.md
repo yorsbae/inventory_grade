@@ -74,6 +74,10 @@ Urutan halaman: **DB → Barang Masuk → Produksi → Barang Keluar → Laporan
 - **Ringkas** per periode (Harian/Bulanan/Rentang, default hari ini), dikelompokkan per **Motif, Jenis, Tanggal, Dept, Ket, atau Nama Pengrajin**: Baris, SSTB, Jumlah + TOTAL, dengan Export Excel.
 - Pilihan pengelompokan kini seragam di semua halaman: Produksi (Tanggal, Nama karyawan, Motif, Jenis, Ket), Barang Masuk/Keluar (Motif, Jenis, Tanggal, Dept, Ket, Pengrajin), Laporan Stok (Motif, Jenis, Tanggal, Dept, Ket, Pengrajin).
 
+## Rekap Produksi per Tanggal Masuk Sanggan
+- Di Produksi > Rekap, **Kelompokkan per** kini punya **Tanggal Masuk Sanggan** (selain Tanggal Produksi, Nama karyawan, Motif, Jenis, Ket).
+- Pada pengelompokan ini, **Periode memfilter tanggal masuk sanggan** (bukan tanggal produksi); input yang tidak punya tanggal masuk sanggan tidak ikut. Baris Stok Awal/Saldo tidak ditampilkan. Export Rekap mengikuti pilihan ini.
+
 ## Login
 - Pertama kali dibuka dari komputer server (http://localhost:5000), aplikasi meminta pembuatan **username & password**. Komputer lain di jaringan tidak bisa membuat akun, dan baru bisa masuk setelah akun dibuat.
 - Menu **Ganti Password** dan **Keluar** ada di header. Sesi berlaku 7 hari; 5 kali salah password mengunci IP tersebut 60 detik.

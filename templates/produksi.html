@@ -4,7 +4,7 @@
  <button class="btn primary" id="add">+ Tambah Produksi</button>
  <span id="ddslot"></span>
  <span id="pslot" style="display:contents"></span>
- <label id="byw">Kelompokkan per <select id="by"><option value="tanggal">Tanggal</option><option value="nama">Nama karyawan</option>
+ <label id="byw">Kelompokkan per <select id="by"><option value="tanggal">Tanggal Produksi</option><option value="tgl_masuk_sanggan">Tanggal Masuk Sanggan</option><option value="nama">Nama karyawan</option>
   <option value="motif">Motif</option><option value="jenis">Jenis</option><option value="ket">Ket</option></select></label>
  <span class="grow"></span>
  <a class="btn" id="xl">Export Rekap</a>
@@ -63,7 +63,7 @@ async function run(){
  const body=h('tbody');
  if(!r.rows.length)body.append(h('tr',{},h('td',{colspan:heads.length,class:'empty'},'Belum ada produksi pada rentang ini. Klik "+ Tambah Produksi".')));
  for(const x of r.rows){body.append(h('tr',{class:x.total||x.awal?'total':''},
-  h('td',{},$b.value==='tanggal'&&!x.total&&!x.awal?fmtDate(x.grp):x.grp),h('td',{class:'num'},fmtNum(x.baris)),
+  h('td',{},($b.value==='tanggal'||$b.value==='tgl_masuk_sanggan')&&!x.total&&!x.awal&&x.grp!=='-'?fmtDate(x.grp):(x.grp==='-'&&$b.value==='tgl_masuk_sanggan'?'(tanpa tgl masuk sanggan)':x.grp)),h('td',{class:'num'},fmtNum(x.baris)),
   r.cats.map(c=>h('td',{class:'num'},fmtNum(x[c]))),h('td',{class:'num'},h('b',{},fmtNum(x.jumlah)))));}
  tb.append(body);
  rekapCT.setCols([{n:'grp',l:r.label},{n:'baris',l:'Baris'}].concat(r.cats.map(c=>({n:c,l:(r.labels&&r.labels[c])||c})),[{n:'jumlah',l:'Jumlah'}]));

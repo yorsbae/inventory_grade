@@ -1128,6 +1128,44 @@ class PengrajinStok {
   }
 }
 
+
+/* Ringkas Barang Masuk / Barang Keluar: dikelompokkan per Tanggal, Dept, Jenis, Motif, Ket, atau Pengrajin (Baris, SSTB, Jumlah) */
+class DocRekap {
+  constructor(root, arah) {
+    this.root = root; this.arah = arah; this.range = { from: todayISO(), to: todayISO() }; this.build(); this.load();
+  }
+  build() {
+    const pk = periodPicker(this.range, () => this.load());
+    this.by = h('select', {}, [['motif', 'Motif'], ['jenis', 'Jenis'], ['tanggal', 'Tanggal'], ['dept', 'Dept'], ['ket', 'Ket'], ['pengrajin', 'Nama Pengrajin']]
+      .map(([v, l]) => h('option', { value: v }, l)));
+    this.by.onchange = () => this.load();
+    this.exp = h('a', { class: 'btn' }, 'Export Excel');
+    this.table = h('table'); this.chips = h('div', { class: 'chips' });
+    this.root.append(
+      h('div', { class: 'toolbar' }, ...pk.els, h('label', {}, 'Kelompokkan per', this.by), h('span', { class: 'grow' }), this.exp),
+      h('p', { class: 'hint' }, `Ringkasan ${this.arah === 'masuk' ? 'Barang Masuk' : 'Barang Keluar'} pada periode di atas (default hari ini), dikelompokkan per Motif, Jenis, Tanggal, Dept, Ket, atau Nama Pengrajin. ` +
+        'Baris = jumlah baris barang, SSTB = jumlah SSTB berbeda, Jumlah = total barang.'),
+      this.chips, h('div', { class: 'tablewrap' }, this.table));
+  }
+  async load() {
+    const q = new URLSearchParams({ from: this.range.from, to: this.range.to, by: this.by.value });
+    this.exp.href = `/export/rekap?arah=${this.arah}&` + q;
+    const r = await (await fetch(`/api/rekap/${this.arah}?` + q)).json();
+    const tb = this.table; tb.innerHTML = '';
+    const heads = [[r.label, ''], ['Baris', 'num'], ['SSTB', 'num'], ['Jumlah', 'num']];
+    tb.append(h('thead', {}, h('tr', {}, heads.map(([x, c]) => h('th', { class: c }, x)))));
+    const body = h('tbody');
+    if (!r.rows.length) body.append(h('tr', {}, h('td', { colspan: 4, class: 'empty' }, 'Tidak ada data pada periode ini.')));
+    for (const x of r.rows) {
+      body.append(h('tr', { class: x.total ? 'total' : '' },
+        h('td', { 'data-label': r.label }, this.by.value === 'tanggal' && !x.total ? fmtDate(x.grp) : x.grp),
+        h('td', { class: 'num', 'data-label': 'Baris' }, fmtNum(x.baris)), h('td', { class: 'num', 'data-label': 'SSTB' }, fmtNum(x.sstb)),
+        h('td', { class: 'num', 'data-label': 'Jumlah' }, h('b', {}, fmtNum(x.jumlah)))));
+    }
+    tb.append(body);
+  }
+}
+
 /* ===== Restore DB: pulihkan dari file cadangan (.db) ===== */
 (function () {
   const btn = document.getElementById('restoreBtn'), inp = document.getElementById('restoreFile');

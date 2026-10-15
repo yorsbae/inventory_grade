@@ -1483,12 +1483,6 @@ def stock_range(db, f, t):
     out.sort(key=lambda r: (r["jenis"] or "", r["kode_motif"] or ""))
     return out
 
-def add_total(rows, **extra):
-    tot = dict(kode_motif="TOTAL", motif="", jenis="", total=True, masuk_dept="", keluar_dept="", **extra)
-    for k in ("awal", "masuk", "keluar", "akhir"):
-        tot[k] = sum(r[k] for r in rows)
-    return tot
-
 STOK_BY = {"motif": "Motif", "jenis": "Jenis", "tanggal": "Tanggal", "dept": "Dept", "ket": "Ket", "pengrajin": "Pengrajin"}
 # tipe kolom: no, date, motif (kode + nama), text, num (angka), bnum (angka tebal)
 _SALDO = [("awal", "Saldo Awal", "num"), ("masuk", "Masuk", "num"), ("masuk_dept", "Dari Dept", "text"),
@@ -1918,6 +1912,41 @@ def export_stok():
                 c.font = Font(bold=True); c.fill = PatternFill("solid", fgColor="D9E1F2")
     widths(ws, [{"no": 6, "date": 14, "text": 24, "num": 14, "bnum": 16}[ty] for _, _, ty in flat])
     return send_wb(wb, f"posisi_stok_{by if mode != 'harian' else 'harian'}_{f}_{t}.xlsx")
+
+def export_rekap(name=None):
+    f, t = date_args()
+    if name in ARAH:
+        arah = ARAH[name]
+        label, rows = rekap_lines_data(get_db(), arah, f, t, request.args.get("by", "tanggal"))
+        wb = Workbook(); ws = wb.active; ws.title = f"Rekap {DOC_TITLE[name]}"
+        labels = [label, "Baris", "SSTB", "Jumlah"]
+        hdr(ws, 1, labels, [DOC_COLOR[name]] * len(labels))
+        for r in rows:
+            ws.append([r["grp"], r["baris"], r["sstb"], r["jumlah"] or 0])
+            for i in range(1, len(labels) + 1):
+                c = ws.cell(row=ws.max_row, column=i); c.border = BORDER
+                if i > 1:
+                    c.number_format = NUM_FMT
+                if r.get("total"):
+                    c.font = Font(bold=True); c.fill = PatternFill("solid", fgColor="D9E1F2")
+        widths(ws, [30, 8, 8, 12])
+        ws.freeze_panes = "B2"
+        return send_wb(wb, f"rekap_{name}_{f}_{t}.xlsx")
+    label, rows = rekap_data(get_db(), f, t, request.args.get("by", "tanggal"))
+    wb = Workbook(); ws = wb.active; ws.title = "Rekap Produksi"
+    labels = [label, "Baris"] + [LABELS[c] for c in CATS] + ["Jumlah"]
+    hdr(ws, 1, labels, ["4472C4"] * len(labels))
+    for r in rows:
+        ws.append([r["grp"], r["baris"]] + [r[c] or 0 for c in CATS] + [r["jumlah"] or 0])
+        for i in range(1, len(labels) + 1):
+            c = ws.cell(row=ws.max_row, column=i); c.border = BORDER
+            if i > 1:
+                c.number_format = NUM_FMT
+            if r.get("total") or r.get("awal"):
+                c.font = Font(bold=True); c.fill = PatternFill("solid", fgColor="D9E1F2")
+    widths(ws, [30, 8] + [11] * len(CATS) + [12])
+    ws.freeze_panes = "B2"
+    return send_wb(wb, f"rekap_produksi_{f}_{t}.xlsx")
 
 def export_live():
     t = parse_date(request.args.get("to")) or dt.date.today().isoformat()

@@ -69,6 +69,11 @@ Urutan halaman: **DB → Barang Masuk → Produksi → Barang Keluar → Laporan
   - **Dept / Ket / Pengrajin**: Masuk, Keluar, Selisih (Masuk - Keluar), dan Jumlah SSTB. Saldo tidak ditampilkan karena stok awal tidak dicatat per dept/ket/pengrajin.
 - Mode **Per hari per motif (rantai saldo)** tetap ada untuk rincian tanggal x motif. Export Excel mengikuti pilihan yang sedang tampil.
 
+## Ringkas di Barang Masuk / Barang Keluar
+- Dropdown di halaman Barang Masuk dan Barang Keluar: *Daftar (SSTB)*, **Ringkas**, (Barang Keluar juga *Stok Pengrajin*).
+- **Ringkas** per periode (Harian/Bulanan/Rentang, default hari ini), dikelompokkan per **Motif, Jenis, Tanggal, Dept, Ket, atau Nama Pengrajin**: Baris, SSTB, Jumlah + TOTAL, dengan Export Excel.
+- Pilihan pengelompokan kini seragam di semua halaman: Produksi (Tanggal, Nama karyawan, Motif, Jenis, Ket), Barang Masuk/Keluar (Motif, Jenis, Tanggal, Dept, Ket, Pengrajin), Laporan Stok (Motif, Jenis, Tanggal, Dept, Ket, Pengrajin).
+
 ## Login
 - Pertama kali dibuka dari komputer server (http://localhost:5000), aplikasi meminta pembuatan **username & password**. Komputer lain di jaringan tidak bisa membuat akun, dan baru bisa masuk setelah akun dibuat.
 - Menu **Ganti Password** dan **Keluar** ada di header. Sesi berlaku 7 hari; 5 kali salah password mengunci IP tersebut 60 detik.

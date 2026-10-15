@@ -1423,6 +1423,13 @@ def api_item_delete(name, item_id):
 # --------------------------------------------------------------------------
 # Logika stok: saldo akhir hari N = saldo awal hari N+1
 # --------------------------------------------------------------------------
+def dept_pairs_str(pairs):
+    """[(dept, jumlah), ...] -> 'DEPT A 10, DEPT B 5' (dept sama digabung, terbesar dulu)."""
+    tot = {}
+    for d, j in pairs:
+        tot[d] = tot.get(d, 0) + j
+    return ", ".join(f"{d} {fmt_id(j)}" for d, j in sorted(tot.items(), key=lambda x: (-x[1], x[0])))
+
 def stock_range(db, f, t):
     """Laporan per Motif (Kode Motif) untuk rentang [f, t]. Saldo awal = saldo akhir hari sebelum f.
     Catatan: ini khusus untuk tampilan Laporan Stok. Pengecekan stok tersedia saat input Barang Keluar
@@ -1459,8 +1466,7 @@ def stock_range(db, f, t):
             out.setdefault(r["mid"], []).append((r["dept"], r["jml"]))
         return out
 
-    def dept_str(pairs):
-        return ", ".join(f"{d} {fmt_id(j)}" for d, j in pairs)
+    dept_str = dept_pairs_str
 
     m, k = agg("M"), agg("K")
     md, kd = agg_dept("M"), agg_dept("K")
@@ -1472,7 +1478,8 @@ def stock_range(db, f, t):
         kp, kc = k.get(mid, (0, 0))
         awal = base + mp - kp
         out.append(dict(kode_motif=kode, motif=nama, jenis=jenis, awal=awal, masuk=mc, keluar=kc, akhir=awal + mc - kc,
-                        masuk_dept=dept_str(md.get(mid, [])), keluar_dept=dept_str(kd.get(mid, []))))
+                        masuk_dept=dept_str(md.get(mid, [])), keluar_dept=dept_str(kd.get(mid, [])),
+                        _md=md.get(mid, []), _kd=kd.get(mid, [])))
     out.sort(key=lambda r: (r["jenis"] or "", r["kode_motif"] or ""))
     return out
 
@@ -1482,25 +1489,104 @@ def add_total(rows, **extra):
         tot[k] = sum(r[k] for r in rows)
     return tot
 
-def stock_data(db, f, t, mode):
+STOK_BY = {"motif": "Motif", "jenis": "Jenis", "tanggal": "Tanggal", "dept": "Dept", "ket": "Ket", "pengrajin": "Pengrajin"}
+# tipe kolom: no, date, motif (kode + nama), text, num (angka), bnum (angka tebal)
+_SALDO = [("awal", "Saldo Awal", "num"), ("masuk", "Masuk", "num"), ("masuk_dept", "Dari Dept", "text"),
+          ("keluar", "Keluar", "num"), ("keluar_dept", "Ke Dept", "text"), ("akhir", "Saldo Akhir", "bnum")]
+_NO = ("no", "No", "no")
+
+def _sum_total(rows, label_key="kode_motif", **extra):
+    tot = dict(total=True, masuk_dept="", keluar_dept="", **extra)
+    tot.setdefault(label_key, "TOTAL")
+    for k in ("awal", "masuk", "keluar", "akhir"):
+        tot[k] = sum(r[k] for r in rows)
+    return tot
+
+def add_total(rows, **extra):
+    tot = _sum_total(rows, **extra)
+    tot.setdefault("motif", ""); tot.setdefault("jenis", "")
+    return tot
+
+def _clean(rows):  # buang rincian mentah (_md/_kd) sebelum dikirim ke browser / Excel
+    return [{k: v for k, v in r.items() if not k.startswith("_")} for r in rows]
+
+def _days(f, t):
+    d0, d1 = dt.date.fromisoformat(f), dt.date.fromisoformat(t)
+    if (d1 - d0).days > 92:
+        d1 = d0 + dt.timedelta(days=92)
+    d = d0
+    while d <= d1:
+        yield d.isoformat()
+        d += dt.timedelta(days=1)
+
+def stock_flow(db, f, t, by):
+    """Dept / Ket / Pengrajin: hanya Masuk & Keluar pada rentang [f,t] (saldo tidak bermakna per dept/ket/pengrajin)."""
+    expr = {"dept": "dp.nama", "ket": "k.nama", "pengrajin": "COALESCE(pg.nama,'(tanpa pengrajin)')"}[by]
+    rows = db.execute(f"""SELECT {expr} grp,
+            SUM(CASE WHEN d.arah='M' THEN i.jumlah ELSE 0 END) masuk, SUM(CASE WHEN d.arah='K' THEN i.jumlah ELSE 0 END) keluar,
+            COUNT(DISTINCT d.id) sstb
+        FROM dokumen_item i JOIN dokumen d ON d.id=i.dokumen_id JOIN ref_dept dp ON dp.id=d.dept_id
+        JOIN ref_ket k ON k.id=i.ket_id LEFT JOIN ref_pengrajin pg ON pg.id=d.pengrajin_id
+        LEFT JOIN opening o ON o.kode_motif_id=i.motif_id
+        WHERE d.tanggal>=? AND d.tanggal<=? AND d.tanggal>=COALESCE(o.tanggal_mulai,'')
+        GROUP BY grp ORDER BY grp COLLATE NOCASE""", (f, t)).fetchall()
+    out = [dict(grp=r["grp"], masuk=r["masuk"] or 0, keluar=r["keluar"] or 0, selisih=(r["masuk"] or 0) - (r["keluar"] or 0),
+                sstb=r["sstb"]) for r in rows]
+    if out:
+        n = db.execute("""SELECT COUNT(DISTINCT d.id) FROM dokumen d WHERE d.tanggal>=? AND d.tanggal<=?""", (f, t)).fetchone()[0]
+        out.append(dict(grp="TOTAL", total=True, masuk=sum(r["masuk"] for r in out), keluar=sum(r["keluar"] for r in out),
+                        selisih=sum(r["selisih"] for r in out), sstb=n))
+    return out
+
+def stock_view(db, f, t, mode, by="motif"):
+    """Return (kolom, baris). kolom = [(kunci, judul, tipe)]. mode 'harian' = rantai saldo per hari per motif;
+    mode 'ringkas' = ringkasan dikelompokkan per `by` (motif / jenis / tanggal / dept / ket / pengrajin)."""
     if mode == "harian":
-        d0, d1 = dt.date.fromisoformat(f), dt.date.fromisoformat(t)
-        if (d1 - d0).days > 92:
-            d1 = d0 + dt.timedelta(days=92)
-        out, d = [], d0
-        while d <= d1:
-            day = d.isoformat()
-            rows = stock_range(db, day, day)
-            rows = [r for r in rows if r["masuk"] or r["keluar"]]  # lewati jenis tanpa aktivitas pada hari itu
+        out = []
+        for day in _days(f, t):
+            rows = [r for r in stock_range(db, day, day) if r["masuk"] or r["keluar"]]  # lewati motif tanpa aktivitas hari itu
             for r in rows:
                 r["tanggal"] = day
             out += rows
             if rows:
                 out.append(add_total(rows, tanggal=day))
-            d += dt.timedelta(days=1)
-        return out
+        return [_NO, ("tanggal", "Tanggal", "date"), ("kode_motif", "Motif", "motif"), ("jenis", "Jenis", "text")] + _SALDO, _clean(out)
+    by = by if by in STOK_BY else "motif"
+    if by in ("dept", "ket", "pengrajin"):
+        cols = [_NO, ("grp", STOK_BY[by], "text"), ("masuk", "Masuk (dari)" if by == "dept" else "Masuk", "num"),
+                ("keluar", "Keluar (ke)" if by == "dept" else "Keluar", "num"),
+                ("selisih", "Selisih (Masuk - Keluar)", "bnum"), ("sstb", "Jumlah SSTB", "num")]
+        return cols, stock_flow(db, f, t, by)
+    if by == "tanggal":   # satu baris per hari (hanya hari yang ada aktivitas), saldo berantai antar hari
+        out = []
+        for day in _days(f, t):
+            rows = stock_range(db, day, day)
+            if not any(r["masuk"] or r["keluar"] for r in rows):
+                continue
+            row = _sum_total(rows, tanggal=day)
+            row.pop("total"); row.pop("kode_motif", None); row["tanggal"] = day
+            row["masuk_dept"] = dept_pairs_str([x for r in rows for x in r["_md"]])
+            row["keluar_dept"] = dept_pairs_str([x for r in rows for x in r["_kd"]])
+            out.append(row)
+        if out:   # TOTAL: saldo awal = awal hari pertama, saldo akhir = akhir hari terakhir
+            out.append(dict(tanggal="TOTAL", total=True, awal=out[0]["awal"], akhir=out[-1]["akhir"],
+                            masuk=sum(r["masuk"] for r in out), keluar=sum(r["keluar"] for r in out), masuk_dept="", keluar_dept=""))
+        return [_NO, ("tanggal", "Tanggal", "date")] + _SALDO, out
     rows = stock_range(db, f, t)
-    return rows + ([add_total(rows)] if rows else [])
+    if by == "jenis":
+        groups = {}
+        for r in rows:
+            g = groups.setdefault(r["jenis"] or "(tanpa jenis)", dict(jenis=r["jenis"] or "(tanpa jenis)", awal=0, masuk=0, keluar=0, akhir=0, _md=[], _kd=[]))
+            for k in ("awal", "masuk", "keluar", "akhir"):
+                g[k] += r[k]
+            g["_md"] += r["_md"]; g["_kd"] += r["_kd"]
+        out = sorted(groups.values(), key=lambda g: g["jenis"])
+        for g in out:
+            g["masuk_dept"], g["keluar_dept"] = dept_pairs_str(g["_md"]), dept_pairs_str(g["_kd"])
+        if out:
+            out.append(_sum_total(out, "jenis"))
+        return [_NO, ("jenis", "Jenis", "text")] + _SALDO, _clean(out)
+    return [_NO, ("kode_motif", "Motif", "motif"), ("jenis", "Jenis", "text")] + _SALDO, _clean(rows + ([add_total(rows)] if rows else []))
 
 def date_args():
     today = dt.date.today().isoformat()
@@ -1514,8 +1600,9 @@ def date_args():
 def api_stok():
     f, t = date_args()
     mode = request.args.get("mode", "ringkas")
-    data = stock_data(get_db(), f, t, mode)
-    return jsonify(rows=data, **{"from": f, "to": t}, mode=mode)
+    by = request.args.get("by", "motif")
+    cols, data = stock_view(get_db(), f, t, mode, by)
+    return jsonify(rows=data, columns=[dict(k=k, l=l, t=ty) for k, l, ty in cols], **{"from": f, "to": t}, mode=mode, by=by)
 
 BY = {"tanggal": ("t.tgl_produksi", "Tanggal"), "nama": ("r_nama.nama", "Nama"), "jenis": ("rj.nama", "Jenis"),
       "motif": ("r_kode_motif.kode_motif || ' - ' || r_kode_motif.nama_motif", "Motif"),
@@ -1791,76 +1878,46 @@ def export_lines(name):
 def export_stok():
     f, t = date_args()
     mode = request.args.get("mode", "ringkas")
-    rows = stock_data(get_db(), f, t, mode)
+    by = request.args.get("by", "motif")
+    cols, rows = stock_view(get_db(), f, t, mode, by)
+    flat = []   # kolom Excel: tipe 'motif' dipecah jadi Kode Motif + Motif
+    for k, l, ty in cols:
+        flat += [("kode_motif", "Kode Motif", "text"), ("motif", "Motif", "text")] if ty == "motif" else [(k, l, ty)]
     wb = Workbook(); ws = wb.active; ws.title = "Posisi Stok"
-    harian = mode == "harian"
-    ncol = 11 if harian else 10
+    ncol = len(flat)
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncol)
-    ws["A1"] = "LAPORAN POSISI STOCK GRADE"
+    ws["A1"] = "LAPORAN POSISI STOCK GRADE" + ("" if mode == "harian" else f" - PER {STOK_BY.get(by, 'Motif').upper()}")
     ws["A1"].font = Font(bold=True, size=14); ws["A1"].alignment = Alignment(horizontal="center")
     ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=ncol)
     ws["A2"] = dt.date.fromisoformat(f) if f == t else f"{dt.date.fromisoformat(f):%d-%b-%Y} s/d {dt.date.fromisoformat(t):%d-%b-%Y}"
     if f == t:
         ws["A2"].number_format = "d-mmm-yy"
     ws["A2"].alignment = Alignment(horizontal="center")
-    labels = (["Tanggal"] if harian else []) + \
-             ["No", "Kode Motif", "Motif", "Jenis", "Saldo Awal", "Masuk", "Dari Dept", "Keluar", "Ke Dept", "Saldo Akhir"]
-    hdr(ws, 4, labels, ["4472C4"] * len(labels))
+    hdr(ws, 4, [l for _, l, _ in flat], ["4472C4"] * ncol)
     n = 0
     for r in rows:
         if not r.get("total"):
             n += 1
-        line = ([dt.date.fromisoformat(r["tanggal"])] if harian else []) + \
-               ["" if r.get("total") else n, r["kode_motif"], r["motif"], r["jenis"], r["awal"], r["masuk"],
-                r.get("masuk_dept", ""), r["keluar"], r.get("keluar_dept", ""), r["akhir"]]
+        line = []
+        for k, _, ty in flat:
+            if ty == "no":
+                line.append("" if r.get("total") else n)
+            elif ty == "date":
+                v = r.get(k)
+                line.append(dt.date.fromisoformat(v) if v and v != "TOTAL" else v or "")
+            else:
+                line.append(r.get(k, "") if ty in ("num", "bnum") else (r.get(k) or ""))
         ws.append(line)
-        rr = ws.max_row
-        numcols = {len(line) - 5, len(line) - 4, len(line) - 2, len(line)}  # Saldo Awal, Masuk, Keluar, Saldo Akhir
-        for i in range(1, len(line) + 1):
-            c = ws.cell(row=rr, column=i); c.border = BORDER
-            if harian and i == 1:
+        for i, (k, _, ty) in enumerate(flat, 1):
+            c = ws.cell(row=ws.max_row, column=i); c.border = BORDER
+            if ty == "date" and not isinstance(line[i - 1], str):
                 c.number_format = "dd-mmm-yy"
-            if i in numcols:
+            if ty in ("num", "bnum"):
                 c.number_format = NUM_FMT
             if r.get("total"):
                 c.font = Font(bold=True); c.fill = PatternFill("solid", fgColor="D9E1F2")
-    widths(ws, ([12] if harian else []) + [6, 14, 24, 12, 12, 11, 24, 11, 24, 12])
-    return send_wb(wb, f"posisi_stok_{f}_{t}.xlsx")
-
-def export_rekap(name=None):
-    f, t = date_args()
-    if name in ARAH:
-        arah = ARAH[name]
-        label, rows = rekap_lines_data(get_db(), arah, f, t, request.args.get("by", "tanggal"))
-        wb = Workbook(); ws = wb.active; ws.title = f"Rekap {DOC_TITLE[name]}"
-        labels = [label, "Baris", "SSTB", "Jumlah"]
-        hdr(ws, 1, labels, [DOC_COLOR[name]] * len(labels))
-        for r in rows:
-            ws.append([r["grp"], r["baris"], r["sstb"], r["jumlah"] or 0])
-            for i in range(1, len(labels) + 1):
-                c = ws.cell(row=ws.max_row, column=i); c.border = BORDER
-                if i > 1:
-                    c.number_format = NUM_FMT
-                if r.get("total"):
-                    c.font = Font(bold=True); c.fill = PatternFill("solid", fgColor="D9E1F2")
-        widths(ws, [30, 8, 8, 12])
-        ws.freeze_panes = "B2"
-        return send_wb(wb, f"rekap_{name}_{f}_{t}.xlsx")
-    label, rows = rekap_data(get_db(), f, t, request.args.get("by", "tanggal"))
-    wb = Workbook(); ws = wb.active; ws.title = "Rekap Produksi"
-    labels = [label, "Baris"] + [LABELS[c] for c in CATS] + ["Jumlah"]
-    hdr(ws, 1, labels, ["4472C4"] * len(labels))
-    for r in rows:
-        ws.append([r["grp"], r["baris"]] + [r[c] or 0 for c in CATS] + [r["jumlah"] or 0])
-        for i in range(1, len(labels) + 1):
-            c = ws.cell(row=ws.max_row, column=i); c.border = BORDER
-            if i > 1:
-                c.number_format = NUM_FMT
-            if r.get("total") or r.get("awal"):
-                c.font = Font(bold=True); c.fill = PatternFill("solid", fgColor="D9E1F2")
-    widths(ws, [30, 8] + [11] * len(CATS) + [12])
-    ws.freeze_panes = "B2"
-    return send_wb(wb, f"rekap_produksi_{f}_{t}.xlsx")
+    widths(ws, [{"no": 6, "date": 14, "text": 24, "num": 14, "bnum": 16}[ty] for _, _, ty in flat])
+    return send_wb(wb, f"posisi_stok_{by if mode != 'harian' else 'harian'}_{f}_{t}.xlsx")
 
 def export_live():
     t = parse_date(request.args.get("to")) or dt.date.today().isoformat()

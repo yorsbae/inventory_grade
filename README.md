@@ -61,6 +61,14 @@ Urutan halaman: **DB → Barang Masuk → Produksi → Barang Keluar → Laporan
 - Muncul bar kuning "N dipilih" dengan tombol **Hapus terpilih** (ada konfirmasi) dan **Batal pilih**. Di Barang Masuk/Keluar yang dihapus adalah seluruh SSTB beserta barisnya.
 - Master yang masih dipakai data lain (mis. motif yang sudah ada transaksinya) otomatis **dilewati** dan dilaporkan; yang lain tetap terhapus. Pilihan hilang saat halaman/filter/periode berganti. Maksimal 500 baris per permintaan.
 
+## Laporan Stok: ringkasan per Motif / Jenis / Tanggal / Dept / Ket / Pengrajin
+- Tampilan **Ringkas** punya pilihan **Kelompokkan per**:
+  - **Motif**: satu baris per Kode Motif (seperti sebelumnya).
+  - **Jenis**: gabungan semua motif sejenis.
+  - **Tanggal**: satu baris per hari yang ada aktivitas, saldo berantai (saldo akhir hari N = saldo awal hari berikutnya); TOTAL = saldo awal hari pertama s/d saldo akhir hari terakhir.
+  - **Dept / Ket / Pengrajin**: Masuk, Keluar, Selisih (Masuk - Keluar), dan Jumlah SSTB. Saldo tidak ditampilkan karena stok awal tidak dicatat per dept/ket/pengrajin.
+- Mode **Per hari per motif (rantai saldo)** tetap ada untuk rincian tanggal x motif. Export Excel mengikuti pilihan yang sedang tampil.
+
 ## Login
 - Pertama kali dibuka dari komputer server (http://localhost:5000), aplikasi meminta pembuatan **username & password**. Komputer lain di jaringan tidak bisa membuat akun, dan baru bisa masuk setelah akun dibuat.
 - Menu **Ganti Password** dan **Keluar** ada di header. Sesi berlaku 7 hari; 5 kali salah password mengunci IP tersebut 60 detik.

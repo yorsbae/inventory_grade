@@ -2,14 +2,19 @@
 {% block body %}
 <div class="toolbar">
  <span id="pslot" style="display:contents"></span>
- <label>Tampilan <select id="mode"><option value="ringkas">Ringkas (per motif)</option>
-  <option value="harian">Per hari (rantai saldo)</option></select></label>
+ <label>Tampilan <select id="mode"><option value="ringkas">Ringkas</option>
+  <option value="harian">Per hari per motif (rantai saldo)</option></select></label>
+ <label id="byw">Kelompokkan per <select id="by"><option value="motif">Motif</option><option value="jenis">Jenis</option>
+  <option value="tanggal">Tanggal</option><option value="dept">Dept</option><option value="ket">Ket</option>
+  <option value="pengrajin">Pengrajin</option></select></label>
  <button class="btn primary" id="go">Tampilkan</button>
  <span class="grow"></span>
  <a class="btn" id="xl">Export Excel</a>
 </div>
 <p class="hint">Saldo Awal = Saldo Akhir hari sebelumnya. Dihitung dari transaksi, jadi koreksi data lama otomatis mengubah saldo hari-hari sesudahnya.
- Baris per Motif (Kode Motif). Kolom "Dari Dept"/"Ke Dept" menunjukkan asal/tujuan barang pada rentang yang ditampilkan. Mode Per hari hanya menampilkan motif yang ada aktivitas masuk/keluar pada hari itu.</p>
+ <b>Ringkas</b> bisa dikelompokkan per <b>Motif</b>, <b>Jenis</b> (gabungan semua motif sejenis), <b>Tanggal</b> (satu baris per hari yang ada aktivitas, saldo berantai) atau
+ per <b>Dept</b> / <b>Ket</b> / <b>Pengrajin</b> (hanya Masuk, Keluar, dan Selisih karena saldo tidak berlaku per dept/ket/pengrajin).
+ Kolom "Dari Dept"/"Ke Dept" menunjukkan asal/tujuan barang pada periode yang ditampilkan. Mode "Per hari per motif" menampilkan rincian tanggal x motif yang ada aktivitas.</p>
 <div class="tablewrap"><table id="tb" class="resp"></table></div>
 {% endblock %}
 {% block script %}<script>
@@ -17,39 +22,40 @@ const $m=document.getElementById('mode');
 const range={from:todayISO(),to:todayISO()};   // periode: default hari ini
 const picker=periodPicker(range,()=>run());
 document.getElementById('pslot').append(...picker.els);
-const STOK_COLS=['No','Tanggal','Motif','Jenis','Saldo Awal','Masuk','Dari Dept','Keluar','Ke Dept','Saldo Akhir'];
 const stokCT=colToggle('stok',()=>stokCT.apply(document.getElementById('tb')));
-stokCT.setCols(STOK_COLS.map(x=>({n:x,l:x})));
 document.getElementById('xl').before(stokCT.el);
 function motifCell(kode, nama){
  return h('div',{},h('b',{},kode||'-'), nama ? h('small',{class:'deptbrk'},nama) : null);
 }
 function tglLabel(x){return !x.tanggal?'':(!x.tanggal_sd||x.tanggal_sd===x.tanggal)?fmtDate(x.tanggal):fmtDate(x.tanggal)+' s/d '+fmtDate(x.tanggal_sd);}
+const $by=document.getElementById('by');
 async function run(){
  const harian=$m.value==='harian';
- const q=new URLSearchParams({from:range.from,to:range.to,mode:$m.value});
+ document.getElementById('byw').style.display=harian?'none':'';
+ const q=new URLSearchParams({from:range.from,to:range.to,mode:$m.value,by:$by.value});
  document.getElementById('xl').href='/export/stok?'+q;
  const r=await (await fetch('/api/stok?'+q)).json();
+ const cols=r.columns;
  const tb=document.getElementById('tb');tb.innerHTML='';
- const heads=[['No','c'],['Tanggal',''],['Motif',''],['Jenis',''],['Saldo Awal','num'],
-  ['Masuk','num'],['Dari Dept',''],['Keluar','num'],['Ke Dept',''],['Saldo Akhir','num']];
- tb.append(h('thead',{},h('tr',{},heads.map(([x,cls])=>h('th',{class:('nosort '+cls).trim()},x)))));
+ const cls=t=>t==='no'?'c':(t==='num'||t==='bnum')?'num':'';
+ tb.append(h('thead',{},h('tr',{},cols.map(c=>h('th',{class:('nosort '+cls(c.t)).trim()},c.l)))));
  const body=h('tbody');let n=0;
- if(!r.rows.length)body.append(h('tr',{},h('td',{colspan:heads.length,class:'empty'},
-  harian?'Tidak ada aktivitas masuk/keluar pada rentang ini.':'Belum ada data. Isi Stok Awal Sistem di halaman DB dan input transaksi.')));
+ if(!r.rows.length)body.append(h('tr',{},h('td',{colspan:cols.length,class:'empty'},
+  'Tidak ada aktivitas masuk/keluar pada periode ini.')));
+ const firstLab=harian?cols.findIndex(c=>c.t==='motif'):cols.findIndex(c=>c.t==='motif'||c.t==='text'||c.t==='date');
  for(const x of r.rows){if(!x.total)n++;
-  body.append(h('tr',{class:x.total?'total':''},
-   h('td',{class:'c','data-label':'No'},x.total?'':n),
-   h('td',{'data-label':'Tanggal'},tglLabel(x)),
-   h('td',{'data-label':'Motif'},x.total?h('b',{},'TOTAL'):motifCell(x.kode_motif,x.motif)),
-   h('td',{'data-label':'Jenis'},x.jenis),
-   h('td',{class:'num','data-label':'Saldo Awal'},fmtNum(x.awal)),
-   h('td',{class:'num','data-label':'Masuk'},fmtNum(x.masuk)),
-   h('td',{'data-label':'Dari Dept'},x.masuk_dept||''),
-   h('td',{class:'num','data-label':'Keluar'},fmtNum(x.keluar)),
-   h('td',{'data-label':'Ke Dept'},x.keluar_dept||''),
-   h('td',{class:'num','data-label':'Saldo Akhir'},h('b',{},fmtNum(x.akhir)))));}
- tb.append(body);stokCT.apply(tb);}
+  body.append(h('tr',{class:x.total?'total':''},cols.map((c,i)=>{
+   const attrs={'data-label':c.l,class:cls(c.t)};let v;
+   if(c.t==='no')v=x.total?'':n;
+   else if(c.t==='num')v=fmtNum(x[c.k]);
+   else if(c.t==='bnum')v=h('b',{},fmtNum(x[c.k]));
+   else if(x.total&&!(harian&&c.t==='date'))v=i===firstLab?h('b',{},'TOTAL'):'';
+   else if(c.t==='motif')v=motifCell(x.kode_motif,x.motif);
+   else if(c.t==='date')v=tglLabel(x);
+   else v=x[c.k]==null?'':x[c.k];
+   return h('td',attrs,v);})));}
+ tb.append(body);
+ stokCT.setCols(cols.map(c=>({n:c.l,l:c.l})));stokCT.apply(tb);}
 document.getElementById('go').onclick=run;
-$m.onchange=run;run();
+$m.onchange=$by.onchange=run;run();
 </script>{% endblock %}

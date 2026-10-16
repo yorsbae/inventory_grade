@@ -54,7 +54,7 @@ h1{font-size:21px;margin:0;font-weight:700}h3.sub{font-size:14px;margin:18px 0 6
 @media(max-width:900px){
  .side{transform:translateX(-100%)}body.menu-open .side{transform:none}
  body.menu-open .side-bg{display:block;position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:35}
- .content{margin-left:0}.menu-btn{display:block}.gsearch{display:none}.online{display:none}.userbtn b{display:none}
+ .content{margin-left:0}.menu-btn{display:block}.gsearch{display:none}.userbtn b{display:none}
  .crumb{flex:1;overflow:hidden;text-overflow:ellipsis}main{padding:14px 12px 40px}
 }
 
@@ -384,3 +384,84 @@ details.tip p,details.tip div{margin:8px 0 2px}
  body.side-collapsed .navg>.subnav{max-height:calc(100vh - 24px);overflow:auto}
  body.side-collapsed .navg[data-k=db]>.subnav{top:auto;bottom:0}
 }
+.gitem.gall{border-style:dashed;font-weight:600}
+.colpop-act .colitem{padding:2px 0}
+
+/* ===== Mode gelap / terang (tombol di bar atas; pilihan tersimpan di browser) ===== */
+.themebtn{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:20px;padding:5px 12px;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap}
+.themebtn:hover{background:var(--blue-l)}
+.themebtn svg{width:16px;height:16px}
+.themebtn .ic-sun{display:none}
+html[data-theme=dark] .themebtn .ic-sun{display:block}
+html[data-theme=dark] .themebtn .ic-moon{display:none}
+@media(max-width:900px){.themebtn span{display:none}.themebtn{padding:6px}}
+html[data-theme=dark]{color-scheme:dark;
+ --bg:#0e1524;--card:#162033;--line:#27344d;--line-2:#1f2b42;--ink:#e5eaf5;--mut:#93a0ba;--blue-l:#1b2c52;
+ --ok:#4ade80;--ok-bg:#12351f;--warn:#fbbf24;--warn-bg:#3a2c14;--bad:#f87171;--bad-bg:#3b1d22;--idle:#cbd5e1;--idle-bg:#222d44;
+ --navy-2:#bcd0f7}
+html[data-theme=dark] .grouptoggle,html[data-theme=dark] .fhead,html[data-theme=dark] .dd .viewbtn{color:#cfe0ff}
+html[data-theme=dark] .userpop,html[data-theme=dark] .colpop,html[data-theme=dark] .fpanel{box-shadow:0 12px 32px rgba(0,0,0,.55)}
+html[data-theme=dark] .chip.big,html[data-theme=dark] .filterchips .chip{color:#cfe0ff}
+html[data-theme=dark] .msg.err{color:#fca5a5}html[data-theme=dark] .msg.warn{color:#fcd34d}html[data-theme=dark] .msg.ok{color:#86efac}
+html[data-theme=dark] .logo svg{stroke:#162033}
+html[data-theme=dark] .crumb i{color:#4b5a78}
+html[data-theme=dark] .gsearch input{background:#1c2740}
+html[data-theme=dark] .gsearch input:focus{background:#162033}
+html[data-theme=dark] .userbtn:hover{background:#1f2a40}
+html[data-theme=dark] .userpop{background:#162033}
+html[data-theme=dark] .userpop a:hover,html[data-theme=dark] .userpop button:hover{background:#1f2a40}
+html[data-theme=dark] h3.sub{color:#cbd5e1}
+html[data-theme=dark] input,html[data-theme=dark] select{border:1px solid #3a4a68;background:#162033}
+html[data-theme=dark] input.auto{background:#22304a;color:#cbd5e1}
+html[data-theme=dark] input.bad{background:#3b1d22}
+html[data-theme=dark] .btn{border:1px solid #3a4a68;background:#162033}
+html[data-theme=dark] .btn:hover{background:#1f2c44}
+html[data-theme=dark] .seg{border:1px solid #3a4a68;background:#162033}
+html[data-theme=dark] .chip{background:#162033}
+html[data-theme=dark] .chip.big{border-color:#34456a}
+html[data-theme=dark] .filterchips .chip{border-color:#34456a;color:#bcd0f7}
+html[data-theme=dark] tr.grouphead td{background:#1f2d4a!important}
+html[data-theme=dark] .msg.err{color:#fca5a5}
+html[data-theme=dark] .msg.warn{color:#fcd34d}
+html[data-theme=dark] .msg.ok{color:#86efac}
+html[data-theme=dark] thead th{background:#1c2740;color:#cbd5e1}
+html[data-theme=dark] tbody tr:hover{background:#1a2742}
+html[data-theme=dark] tr.total td{background:#1f2d4a!important}
+html[data-theme=dark] .ibtn.mut:hover{background:#22304a}
+html[data-theme=dark] .badge.selesai{color:#86efac}
+html[data-theme=dark] .pager .pg{background:#162033}
+html[data-theme=dark] .pager .pg:hover{background:#1f2c44}
+html[data-theme=dark] .colpop{background:#162033}
+html[data-theme=dark] .colpop .colitem:hover{background:#22304a}
+html[data-theme=dark] .combo-list{background:#162033}
+html[data-theme=dark] .modal{background:#162033}
+html[data-theme=dark] .modal-f{background:#18223a}
+html[data-theme=dark] .gchip{border:1px solid #34456a}
+html[data-theme=dark] .gchecks label:hover{background:#1f2c44}
+html[data-theme=dark] .stock{color:#86efac}
+html[data-theme=dark] .tag{background:#222d44}
+html[data-theme=dark] table.resp tr{background:#162033!important}
+html[data-theme=dark] .pnote.part{color:#fcd34d}
+html[data-theme=dark] .pnote.done{color:#86efac}
+html[data-theme=dark] .pnote.over{color:#fca5a5}
+html[data-theme=dark] .pnote.none{color:#cbd5e1}
+html[data-theme=dark] .dd .viewbtn{border-color:#4a5f8a}
+html[data-theme=dark] .ddmenu{background:#162033}
+html[data-theme=dark] .ddmenu button:hover{background:#22304a}
+html[data-theme=dark] .selbar{color:#fcd34d}
+html[data-theme=dark] .si.b{background:#1f3560}
+html[data-theme=dark] .si.g{background:#163524}
+html[data-theme=dark] .si.r{background:#3b1d22}
+html[data-theme=dark] .si.o{background:#3a2c14;color:#fbbf24}
+html[data-theme=dark] .chart .gl{stroke:#2a364d}
+html[data-theme=dark] .dfile{background:#162033}
+html[data-theme=dark] .login-page{background:#162033}
+html[data-theme=dark] .login-copy{color:#7f8fae}
+html[data-theme=dark] .login-err{background:#3b1d22;color:#fca5a5}
+html[data-theme=dark] .login-ok{background:#14301f;color:#86efac}
+html[data-theme=dark] .login-side{background:#162033}
+html[data-theme=dark] details.tip{background:#162033}
+html[data-theme=dark] .fpanel{background:#162033}
+html[data-theme=dark] .ffoot{background:#18223a}
+html[data-theme=dark] .gitem{border:1px solid #3a4a68;background:#162033}
+html[data-theme=dark] .gitem.on{border-color:#4a68a8}

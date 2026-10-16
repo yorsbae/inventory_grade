@@ -8,16 +8,16 @@
 <div id="fchips"></div>
 <details class="tip"><summary>Petunjuk penggunaan</summary><p>Saldo Awal = Saldo Akhir hari sebelumnya. Dihitung dari transaksi, jadi koreksi data lama otomatis mengubah saldo hari-hari sesudahnya.
  Pilih tampilan lewat sub-menu <b>Laporan Stok</b> di sisi kiri: <b>Ringkas</b> atau <b>Per Hari</b> (satu blok per tanggal yang ada aktivitas, lengkap dengan total harian; isi blok mengikuti Group By, default Motif).
- Atur <b>Periode</b> dan <b>Group By</b> di tombol <b>Filter</b>. Group By boleh lebih dari satu, mis. <b>Dept + Motif</b>. <b>Motif</b>/<b>Jenis</b> menampilkan saldo
- (Saldo Awal, Masuk, Keluar, Saldo Akhir); <b>Tanggal</b> sendiri = satu baris per hari dengan saldo berantai; kombinasi lain (Dept, Ket, Pengrajin, atau Tanggal bersama dimensi lain)
+ Atur <b>Periode</b> dan <b>Group By</b> di tombol <b>Filter</b>. Group By boleh lebih dari satu, mis. <b>Dari Dept + Motif</b> atau <b>Ke Dept + Motif</b>. <b>Motif</b>/<b>Jenis</b> menampilkan saldo
+ (Saldo Awal, Masuk, Keluar, Saldo Akhir); <b>Tanggal</b> sendiri = satu baris per hari dengan saldo berantai; kombinasi lain (Dari Dept, Ke Dept, Ket, Pengrajin, atau Tanggal bersama dimensi lain)
  hanya menampilkan Masuk, Keluar, Selisih dan jumlah SSTB karena saldo tidak berlaku per dept/ket/pengrajin.
- Kolom "Dari Dept"/"Ke Dept" menunjukkan asal/tujuan barang pada periode yang ditampilkan.</p></details>
+ <b>Dari Dept</b> = dept asal barang masuk (hanya menghitung Barang Masuk); <b>Ke Dept</b> = dept tujuan barang keluar (hanya menghitung Barang Keluar). Keduanya juga menjadi kolom info asal/tujuan barang pada tampilan Motif/Jenis/Tanggal.</p></details>
 <div class="tablewrap"><table id="tb" class="resp"></table></div>
 {% endblock %}
 {% block script %}<script>
 const range={from:todayISO(),to:todayISO()};   // periode: default hari ini
 let mode='ringkas';
-const GF=[['motif','Motif'],['jenis','Jenis'],['tanggal','Tanggal'],['dept','Dept'],['ket','Ket'],['pengrajin','Pengrajin']].map(([n,l])=>({n,l}));
+const GF=[['motif','Motif'],['jenis','Jenis'],['tanggal','Tanggal'],['dept_dari','Dari Dept'],['dept_ke','Ke Dept'],['ket','Ket'],['pengrajin','Pengrajin']].map(([n,l])=>({n,l}));
 const view={range,pstate:Object.assign(newFilterState(),{group:'motif'}),load:()=>run()};
 const fp=filterPanel(view,{title:'Laporan Stok',defaultGroup:'motif',groupFields:()=>mode==='harian'?GF.filter(g=>g.n!=='tanggal'):GF,onApply:()=>run()});
 document.getElementById('fslot').append(fp.btn);

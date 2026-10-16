@@ -44,7 +44,7 @@ const crud=new Crud(document.getElementById('listView'),'produksi',{hideAdd:true
   sortFields:[{n:'tgl_produksi',l:'Tanggal Produksi'},{n:'tgl_masuk_sanggan',l:'Tanggal Masuk Sanggan'},
    {n:'nama',l:'Nama'},{n:'pasangan',l:'Pasangan'},{n:'kode_motif',l:'Kode Motif'},{n:'motif',l:'Motif'},
    {n:'jenis',l:'Jenis'},{n:'jumlah',l:'Jumlah'},{n:'ket',l:'Keterangan'},{n:'status',l:'Status'}],
-  groupFields:[{n:'tgl_produksi',l:'Tanggal Produksi'},{n:'nama',l:'Nama'},{n:'pasangan',l:'Pasangan'},
+  groupFields:[{n:'tgl_produksi',l:'Tanggal Produksi'},{n:'tgl_masuk_sanggan',l:'Tanggal Masuk Sanggan'},{n:'nama',l:'Nama'},{n:'pasangan',l:'Pasangan'},
    {n:'motif',l:'Motif'},{n:'jenis',l:'Jenis'},{n:'ket',l:'Keterangan'},{n:'status',l:'Status'}],
   fetchDistinct:async col=>await(await fetch(`/api/distinct/produksi?col=${col}&`+crud.params())).json()
  }});

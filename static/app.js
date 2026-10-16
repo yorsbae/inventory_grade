@@ -370,17 +370,23 @@ function colToggle(storeKey, onChange) {
   };
   const setCols = list => {
     cols = list; pop.innerHTML = '';
-    pop.append(h('div', { class: 'colpop-act' },
-      h('button', { type: 'button', class: 'btn sm', onclick: () => {
-        for (const c of cols) delete vis[c.n];
-        save(); setCols(cols); onChange(vis);
-      } }, 'Tampilkan semua')));
+    // Pilih semua (centang = tampilkan semua kolom, hapus centang = sembunyikan semua; setengah = sebagian)
+    const allCb = h('input', { type: 'checkbox' });
+    const syncAll = () => {
+      const shown = cols.filter(c => vis[c.n] !== false).length;
+      allCb.checked = shown === cols.length; allCb.indeterminate = shown > 0 && shown < cols.length;
+    };
+    allCb.addEventListener('change', () => {
+      for (const c of cols) { if (allCb.checked) delete vis[c.n]; else vis[c.n] = false; }
+      save(); setCols(cols); onChange(vis);
+    });
+    pop.append(h('div', { class: 'colpop-act' }, h('label', { class: 'colitem', style: 'padding-left:0' }, allCb, h('b', {}, 'Pilih semua'))));
     for (const c of cols) {
       const cb = h('input', { type: 'checkbox', checked: vis[c.n] !== false });
-      cb.addEventListener('change', () => { vis[c.n] = cb.checked; save(); label(); onChange(vis); });
+      cb.addEventListener('change', () => { vis[c.n] = cb.checked; save(); label(); syncAll(); onChange(vis); });
       pop.append(h('label', { class: 'colitem' }, cb, c.l));
     }
-    label();
+    syncAll(); label();
   };
   btn.addEventListener('click', e => { e.stopPropagation(); pop.classList.toggle('open'); });
   document.addEventListener('click', e => { if (!pop.contains(e.target) && e.target !== btn) pop.classList.remove('open'); });
@@ -525,6 +531,11 @@ function filterPanel(inst, cfg) {
       gbox = h('div', { class: 'gchecks' });
       const draw = () => {
         gbox.innerHTML = '';
+        // Pilih semua / hapus semua (urutan yang sudah dipilih dipertahankan, sisanya ditambahkan sesuai urutan daftar)
+        const all = h('input', { type: 'checkbox', checked: pick.length === gf.length });
+        all.indeterminate = pick.length > 0 && pick.length < gf.length;
+        all.onchange = () => { pick = all.checked ? pick.concat(gf.map(f => f.n).filter(n => !pick.includes(n))) : []; draw(); };
+        gbox.append(h('label', { class: 'gitem gall' + (pick.length === gf.length ? ' on' : '') }, all, 'Pilih semua'));
         for (const f of gf) {
           const i = pick.indexOf(f.n);
           const cb = h('input', { type: 'checkbox', checked: i >= 0 });

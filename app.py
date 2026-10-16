@@ -1657,7 +1657,9 @@ def stock_range(db, f, t):
     out.sort(key=lambda r: (r["jenis"] or "", r["kode_motif"] or ""))
     return out
 
-STOK_BY = {"motif": "Motif", "jenis": "Jenis", "tanggal": "Tanggal", "dept": "Dept", "ket": "Ket", "pengrajin": "Pengrajin"}
+# "Dept" dipisah: Dari Dept = dept asal barang MASUK, Ke Dept = dept tujuan barang KELUAR ("dept" lama otomatis jadi keduanya)
+STOK_BY = {"motif": "Motif", "jenis": "Jenis", "tanggal": "Tanggal", "dept_dari": "Dari Dept", "dept_ke": "Ke Dept", "ket": "Ket", "pengrajin": "Pengrajin"}
+DEPT_ARAH = {"dept_dari": "M", "dept_ke": "K"}
 # tipe kolom: no, date, motif (kode + nama), text, num (angka), bnum (angka tebal)
 _SALDO = [("awal", "Saldo Awal", "num"), ("masuk", "Masuk", "num"), ("masuk_dept", "Dari Dept", "text"),
           ("keluar", "Keluar", "num"), ("keluar_dept", "Ke Dept", "text"), ("akhir", "Saldo Akhir", "bnum")]
@@ -1689,19 +1691,21 @@ def _days(f, t):
 
 def stock_flow(db, f, t, by):
     """Dept / Ket / Pengrajin: hanya Masuk & Keluar pada rentang [f,t] (saldo tidak bermakna per dept/ket/pengrajin)."""
-    expr = {"dept": "dp.nama", "ket": "k.nama", "pengrajin": "COALESCE(pg.nama,'(tanpa pengrajin)')"}[by]
+    expr = {"dept_dari": "dp.nama", "dept_ke": "dp.nama", "ket": "k.nama", "pengrajin": "COALESCE(pg.nama,'(tanpa pengrajin)')"}[by]
+    arah = DEPT_ARAH.get(by)   # Dari Dept -> hanya barang masuk; Ke Dept -> hanya barang keluar
+    af = f" AND d.arah='{arah}'" if arah else ""
     rows = db.execute(f"""SELECT {expr} grp,
             SUM(CASE WHEN d.arah='M' THEN i.jumlah ELSE 0 END) masuk, SUM(CASE WHEN d.arah='K' THEN i.jumlah ELSE 0 END) keluar,
             COUNT(DISTINCT d.id) sstb
         FROM dokumen_item i JOIN dokumen d ON d.id=i.dokumen_id JOIN ref_dept dp ON dp.id=d.dept_id
         JOIN ref_ket k ON k.id=i.ket_id LEFT JOIN ref_pengrajin pg ON pg.id=d.pengrajin_id
         LEFT JOIN opening o ON o.kode_motif_id=i.motif_id
-        WHERE d.tanggal>=? AND d.tanggal<=? AND d.tanggal>=COALESCE(o.tanggal_mulai,'')
+        WHERE d.tanggal>=? AND d.tanggal<=? AND d.tanggal>=COALESCE(o.tanggal_mulai,''){af}
         GROUP BY grp ORDER BY grp COLLATE NOCASE""", (f, t)).fetchall()
     out = [dict(grp=r["grp"], masuk=r["masuk"] or 0, keluar=r["keluar"] or 0, selisih=(r["masuk"] or 0) - (r["keluar"] or 0),
                 sstb=r["sstb"]) for r in rows]
     if out:
-        n = db.execute("""SELECT COUNT(DISTINCT d.id) FROM dokumen d WHERE d.tanggal>=? AND d.tanggal<=?""", (f, t)).fetchone()[0]
+        n = db.execute(f"""SELECT COUNT(DISTINCT d.id) FROM dokumen d WHERE d.tanggal>=? AND d.tanggal<=?{af}""", (f, t)).fetchone()[0]
         out.append(dict(grp="TOTAL", total=True, masuk=sum(r["masuk"] for r in out), keluar=sum(r["keluar"] for r in out),
                         selisih=sum(r["selisih"] for r in out), sstb=n))
     return out
@@ -1711,11 +1715,13 @@ def _dims(by, allowed, default):
     out = []
     for d in (by or "").split(","):
         d = d.strip()
-        if d in allowed and d not in out:
-            out.append(d)
+        for x in (("dept_dari", "dept_ke") if d == "dept" and "dept" not in allowed else (d,)):   # "dept" lama -> Dari Dept + Ke Dept
+            if x in allowed and x not in out:
+                out.append(x)
     return out or [default]
 
-FLOW_DIMS = {"tanggal": ("d.tanggal", "Tanggal"), "dept": ("dp.nama", "Dept"), "ket": ("k.nama", "Ket"),
+FLOW_DIMS = {"tanggal": ("d.tanggal", "Tanggal"), "dept_dari": ("CASE WHEN d.arah='M' THEN dp.nama END", "Dari Dept"),
+             "dept_ke": ("CASE WHEN d.arah='K' THEN dp.nama END", "Ke Dept"), "ket": ("k.nama", "Ket"),
              "pengrajin": ("COALESCE(pg.nama,'(tanpa pengrajin)')", "Pengrajin"),
              "jenis": ("COALESCE(j.nama,'(tanpa jenis)')", "Jenis"), "motif": ("m.kode_motif", "Motif")}
 
@@ -1730,7 +1736,11 @@ def stock_multi(db, f, t, dims):
             cols.append(("kode_motif", "Motif", "motif"))
         else:
             cols.append((d, l, "date" if d == "tanggal" else "text"))
-    cols += [("masuk", "Masuk", "num"), ("keluar", "Keluar", "num"), ("selisih", "Selisih (Masuk - Keluar)", "bnum"), ("sstb", "Jumlah SSTB", "num")]
+    # hanya Dari Dept -> barang masuk saja; hanya Ke Dept -> barang keluar saja; keduanya / tidak ada -> semua
+    ar = {DEPT_ARAH[d] for d in dims if d in DEPT_ARAH}
+    af = f" AND d.arah='{next(iter(ar))}'" if len(ar) == 1 else ""
+    cols += ([("masuk", "Masuk", "num")] if ar != {"K"} else []) + ([("keluar", "Keluar", "num")] if ar != {"M"} else []) \
+        + ([("selisih", "Selisih (Masuk - Keluar)", "bnum")] if len(ar) != 1 else []) + [("sstb", "Jumlah SSTB", "num")]
     rows = db.execute(f"""SELECT {','.join(sel)},
             SUM(CASE WHEN d.arah='M' THEN i.jumlah ELSE 0 END) masuk, SUM(CASE WHEN d.arah='K' THEN i.jumlah ELSE 0 END) keluar,
             COUNT(DISTINCT d.id) sstb
@@ -1738,7 +1748,7 @@ def stock_multi(db, f, t, dims):
         JOIN ref_ket k ON k.id=i.ket_id LEFT JOIN ref_pengrajin pg ON pg.id=d.pengrajin_id
         LEFT JOIN ref_motif m ON m.id=i.motif_id LEFT JOIN ref_jenis j ON j.id=m.jenis_id
         LEFT JOIN opening o ON o.kode_motif_id=i.motif_id
-        WHERE d.tanggal>=? AND d.tanggal<=? AND d.tanggal>=COALESCE(o.tanggal_mulai,'')
+        WHERE d.tanggal>=? AND d.tanggal<=? AND d.tanggal>=COALESCE(o.tanggal_mulai,''){af}
         GROUP BY {','.join(grp)} ORDER BY {','.join(grp)} COLLATE NOCASE""", (f, t)).fetchall()
     out = []
     for r in rows:
@@ -1751,7 +1761,7 @@ def stock_multi(db, f, t, dims):
         x.update(masuk=r["masuk"] or 0, keluar=r["keluar"] or 0, selisih=(r["masuk"] or 0) - (r["keluar"] or 0), sstb=r["sstb"])
         out.append(x)
     if out:
-        n = db.execute("SELECT COUNT(DISTINCT id) FROM dokumen WHERE tanggal>=? AND tanggal<=?", (f, t)).fetchone()[0]
+        n = db.execute(f"SELECT COUNT(DISTINCT id) FROM dokumen WHERE tanggal>=? AND tanggal<=?{af.replace('d.arah', 'arah')}", (f, t)).fetchone()[0]
         out.append(dict(total=True, masuk=sum(r["masuk"] for r in out), keluar=sum(r["keluar"] for r in out),
                         selisih=sum(r["selisih"] for r in out), sstb=n))
     return cols, out
@@ -1788,10 +1798,14 @@ def stock_view(db, f, t, mode, by="motif"):
             return stock_multi(db, f, t, dims)
     else:
         by = dims[0]
-    if by in ("dept", "ket", "pengrajin"):
-        cols = [_NO, ("grp", STOK_BY[by], "text"), ("masuk", "Masuk (dari)" if by == "dept" else "Masuk", "num"),
-                ("keluar", "Keluar (ke)" if by == "dept" else "Keluar", "num"),
-                ("selisih", "Selisih (Masuk - Keluar)", "bnum"), ("sstb", "Jumlah SSTB", "num")]
+    if by in ("dept_dari", "dept_ke", "ket", "pengrajin"):
+        if by == "dept_dari":   # asal barang masuk
+            cols = [_NO, ("grp", STOK_BY[by], "text"), ("masuk", "Masuk", "num"), ("sstb", "Jumlah SSTB", "num")]
+        elif by == "dept_ke":   # tujuan barang keluar
+            cols = [_NO, ("grp", STOK_BY[by], "text"), ("keluar", "Keluar", "num"), ("sstb", "Jumlah SSTB", "num")]
+        else:
+            cols = [_NO, ("grp", STOK_BY[by], "text"), ("masuk", "Masuk", "num"), ("keluar", "Keluar", "num"),
+                    ("selisih", "Selisih (Masuk - Keluar)", "bnum"), ("sstb", "Jumlah SSTB", "num")]
         return cols, stock_flow(db, f, t, by)
     if by == "tanggal":   # satu baris per hari (hanya hari yang ada aktivitas), saldo berantai antar hari
         out = []

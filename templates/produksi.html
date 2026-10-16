@@ -1,15 +1,8 @@
 {% extends "base.html" %}
 {% block body %}
-<div class="toolbar">
- <button class="btn primary" id="add">+ Tambah Produksi</button>
- <span id="ddslot"></span>
- <span id="pslot" style="display:contents"></span>
- <label id="byw">Kelompokkan per <select id="by"><option value="tanggal">Tanggal Produksi</option><option value="tgl_masuk_sanggan">Tanggal Masuk Sanggan</option><option value="nama">Nama karyawan</option>
-  <option value="motif">Motif</option><option value="jenis">Jenis</option><option value="ket">Ket</option></select></label>
- <span class="grow"></span>
- <a class="btn" id="xl">Export Rekap</a>
-</div>
 <div id="rekapView">
+ <div class="toolbar"><span id="rfslot" style="display:contents"></span><span class="grow"></span><a class="btn" id="xl">Export Rekap</a></div>
+ <div id="rchipsrow"></div>
  <div class="chips" id="chips"></div>
  <div class="tablewrap"><table id="tb"></table></div>
 </div>
@@ -17,32 +10,33 @@
 <div id="listView" style="display:none"></div>
 <div id="liveView" style="display:none">
  <div class="toolbar">
-  <label>Kelompokkan per <select id="lby"><option value="motif">Motif</option><option value="jenis">Jenis</option></select></label>
-  <label class="searchbox">Cari <input type="search" id="lq" placeholder="Cari motif / jenis…"></label>
+  <span id="lfslot" style="display:contents"></span>
   <span class="grow"></span><a class="btn" id="lxl">Export Excel</a>
  </div>
- <details class="tip"><summary>Petunjuk penggunaan</summary><p>Rekap realtime dihitung kumulatif s/d <b>tanggal akhir periode</b> di atas (default hari ini): produksi (+ Stok Awal Produksi) dikurangi Barang Keluar yang Ket-nya dipetakan ke kolom itu. Setiap sel: <b>sisa</b> (besar) dan
+ <div id="lchipsrow"></div>
+ <details class="tip"><summary>Petunjuk penggunaan</summary><p>Rekap realtime dihitung kumulatif s/d <b>tanggal akhir periode</b> (default hari ini): produksi (+ Stok Awal Produksi) dikurangi Barang Keluar yang Ket-nya dipetakan ke kolom itu. Setiap sel: <b>sisa</b> (besar) dan
   <i>Produksi − Keluar</i> (kecil). Contoh Neci: produksi 9, keluar 9 &ldquo;Belum Neci&rdquo; → sisa 0; yang kembali sebagai &ldquo;Sudah Neci&rdquo; dicatat di Barang Masuk.
-  Pemetaan kolom ↔ Ket diatur di <a class="lnk" href="/db">DB › Pemetaan Produksi → Keluar</a>. Merah = keluar melebihi produksi.</p></details>
+  Pemetaan kolom ↔ Ket diatur di <a class="lnk" href="/db">DB › Pemetaan Produksi → Keluar</a>. Merah = keluar melebihi produksi.
+  Group By Motif/Jenis diatur di tombol Filter.</p></details>
  <div class="chips" id="lchips"></div>
  <div class="tablewrap"><table id="ltb"></table></div>
 </div>
 {% endblock %}
 {% block script %}<script>
-const $b=document.getElementById('by');
-const $f={value:todayISO()},$t={value:todayISO()};  // periode aktif (diatur picker Periode); default hari ini
 const INIT={{ init|tojson }};
-if(INIT.pid){$f.value=INIT.tanggal;if($t.value<INIT.tanggal)$t.value=INIT.tanggal;}
-const range={from:$f.value,to:$t.value};
-const pr={from:$f.value,to:$t.value};
-const picker=periodPicker(pr,()=>{$f.value=pr.from;$t.value=pr.to;setRange();});
-document.getElementById('pslot').append(...picker.els);
-const rekapCT=colToggle('rekap',()=>rekapCT.apply(document.getElementById('tb')));
-document.getElementById('xl').before(rekapCT.el);
+const pr={from:todayISO(),to:todayISO()};      // periode bersama untuk semua tampilan (Rekap, Daftar Input, Realtime)
+if(INIT.pid){pr.from=INIT.tanggal;if(pr.to<INIT.tanggal)pr.to=INIT.tanggal;}
+const range={from:pr.from,to:pr.to};            // periode milik tabel Daftar Input (Crud)
 if(INIT.pid)range.id=INIT.pid;
+const mkState=g=>Object.assign(newFilterState(),{group:g});
+const addBtn=h('button',{class:'btn primary',id:'add'},'+ Tambah Produksi');
+document.getElementById('pageActions').append(addBtn);
+
+/* --- Daftar Input --- */
 const crud=new Crud(document.getElementById('listView'),'produksi',{hideAdd:true,noRange:true,range,onChange:()=>run(),
  filterPanel:{
-  title:'Produksi',
+  title:'Daftar Input Produksi',
+  range:pr,onApply:()=>setRange(),
   searchPlaceholder:'Cari Nama, Pasangan, Kode Motif, Motif, Jenis, Ket, Catatan…',
   fields:[{n:'nama',l:'Nama'},{n:'pasangan',l:'Pasangan'},{n:'kode_motif',l:'Kode Motif'},
    {n:'motif',l:'Motif'},{n:'jenis',l:'Jenis'},{n:'ket',l:'Keterangan'},{n:'status',l:'Status'}],
@@ -54,19 +48,27 @@ const crud=new Crud(document.getElementById('listView'),'produksi',{hideAdd:true
    {n:'motif',l:'Motif'},{n:'jenis',l:'Jenis'},{n:'ket',l:'Keterangan'},{n:'status',l:'Status'}],
   fetchDistinct:async col=>await(await fetch(`/api/distinct/produksi?col=${col}&`+crud.params())).json()
  }});
+
+/* --- Rekap --- */
+const RGF=[['tanggal','Tanggal Produksi'],['tgl_masuk_sanggan','Tanggal Masuk Sanggan'],['nama','Nama karyawan'],['motif','Motif'],['jenis','Jenis'],['ket','Ket']].map(([n,l])=>({n,l}));
+const rview={range:pr,pstate:mkState('tanggal'),load:()=>run()};
+const fpR=filterPanel(rview,{title:'Rekap Produksi',defaultGroup:'tanggal',groupFields:RGF,onApply:()=>setRange()});
+document.getElementById('rfslot').append(fpR.btn);document.getElementById('rchipsrow').append(fpR.chipsRow);
+const rekapCT=colToggle('rekap',()=>rekapCT.apply(document.getElementById('tb')));
+document.getElementById('xl').before(rekapCT.el);
 async function run(){
- const q=new URLSearchParams({from:$f.value,to:$t.value,by:$b.value});
+ const q=new URLSearchParams({from:pr.from,to:pr.to,by:rview.pstate.group||'tanggal'});
  document.getElementById('xl').href='/export/rekap?'+q;
  const r=await (await fetch('/api/rekap?'+q)).json();const tb=document.getElementById('tb');tb.innerHTML='';
- const heads=[r.label,'Baris'].concat(r.cats.map(c=>(r.labels&&r.labels[c])||c),['Jumlah']);
- tb.append(h('thead',{},h('tr',{},heads.map((x,i)=>h('th',{class:i>0?'num':''},x)))));
+ const dims=r.dims,lab=c=>(r.labels&&r.labels[c])||c;
+ tb.append(h('thead',{},h('tr',{},grpHeads(dims),['Baris'].concat(r.cats.map(lab),['Jumlah']).map(x=>h('th',{class:'num'},x)))));
  const body=h('tbody');
- if(!r.rows.length)body.append(h('tr',{},h('td',{colspan:heads.length,class:'empty'},'Belum ada produksi pada rentang ini. Klik "+ Tambah Produksi".')));
- for(const x of r.rows){body.append(h('tr',{class:x.total||x.awal?'total':''},
-  h('td',{},($b.value==='tanggal'||$b.value==='tgl_masuk_sanggan')&&!x.total&&!x.awal&&x.grp!=='-'?fmtDate(x.grp):(x.grp==='-'&&$b.value==='tgl_masuk_sanggan'?'(tanpa tgl masuk sanggan)':x.grp)),h('td',{class:'num'},fmtNum(x.baris)),
+ if(!r.rows.length)body.append(h('tr',{},h('td',{colspan:dims.length+r.cats.length+2,class:'empty'},'Belum ada produksi pada rentang ini. Klik "+ Tambah Produksi".')));
+ for(const x of r.rows){body.append(h('tr',{class:x.total||x.awal?'total':''},grpTds(dims,x),
+  h('td',{class:'num'},fmtNum(x.baris)),
   r.cats.map(c=>h('td',{class:'num'},fmtNum(x[c]))),h('td',{class:'num'},h('b',{},fmtNum(x.jumlah)))));}
  tb.append(body);
- rekapCT.setCols([{n:'grp',l:r.label},{n:'baris',l:'Baris'}].concat(r.cats.map(c=>({n:c,l:(r.labels&&r.labels[c])||c})),[{n:'jumlah',l:'Jumlah'}]));
+ rekapCT.setCols(dims.map((d,i)=>({n:'g'+i,l:d.l})).concat([{n:'baris',l:'Baris'}],r.cats.map(c=>({n:c,l:lab(c)})),[{n:'jumlah',l:'Jumlah'}]));
  rekapCT.apply(tb);
  const tot=r.rows.find(x=>x.total&&!x.saldo);const ch=document.getElementById('chips');ch.innerHTML='';
  if(tot)ch.append(h('span',{class:'chip'},h('b',{},tot.baris.toLocaleString('id-ID')),' input'),
@@ -76,14 +78,20 @@ function showPid(){const n=document.getElementById('pidnote');n.innerHTML='';n.s
  n.append(h('span',{class:'chip'},'Menampilkan 1 input produksi '),
   h('button',{class:'btn sm',onclick:()=>{clearPid();crud.ready.then(()=>{crud.page=1;crud.load();});}},'Tampilkan semua'));}
 function setRange(){if(range.id)clearPid();
- range.from=$f.value;range.to=$t.value;crud.ready.then(()=>{crud.page=1;crud.load();});run();
- if(dd.value==='live')runLive();}
-$b.onchange=run;
+ range.from=pr.from;range.to=pr.to;crud.ready.then(()=>{crud.page=1;crud.load();});run();
+ if(dd.value==='live')runLive();
+ [fpR,fpL].forEach(p=>p.refresh());}
+
+/* --- Rekap Realtime (Sisa) --- */
+const lview={range:pr,pstate:mkState('motif'),load:()=>runLive()};
+const fpL=filterPanel(lview,{title:'Rekap Realtime',defaultGroup:'motif',searchPlaceholder:'Cari motif / jenis…',
+ groupFields:[{n:'motif',l:'Motif'},{n:'jenis',l:'Jenis'}],onApply:()=>setRange()});
+document.getElementById('lfslot').append(fpL.btn);document.getElementById('lchipsrow').append(fpL.chipsRow);
 const liveCT=colToggle('live',()=>liveCT.apply(document.getElementById('ltb')));
 document.getElementById('lxl').before(liveCT.el);
-const $lby=document.getElementById('lby'),$lq=document.getElementById('lq');
 async function runLive(){
- const q=new URLSearchParams({to:$t.value,by:$lby.value,q:$lq.value.trim()});
+ const g=(lview.pstate.group||'motif').split(',');
+ const q=new URLSearchParams({to:pr.to,by:g.includes('motif')||!g.includes('jenis')?'motif':'jenis',q:lview.pstate.q.trim()});
  document.getElementById('lxl').href='/export/produksi_live?'+q;
  const r=await (await fetch('/api/produksi_live?'+q)).json();const tb=document.getElementById('ltb');tb.innerHTML='';
  const byJ=r.by==='jenis';
@@ -103,16 +111,13 @@ async function runLive(){
  liveCT.setCols(cols.map(([x])=>({n:x,l:x})));liveCT.apply(tb);
  const ch=document.getElementById('lchips');ch.innerHTML='';
  if(r.unmapped&&r.unmapped.length)ch.append(h('span',{class:'chip'},'Belum dipetakan ke Ket keluar: '+r.unmapped.join(', ')+' (sisa = produksi)'));}
-$lby.onchange=runLive;
-let lqT;$lq.addEventListener('input',()=>{clearTimeout(lqT);lqT=setTimeout(runLive,300);});
-const VIEWS=[['rekap','Rekap'],['daftar','Daftar Input'],['live','Rekap Realtime (Sisa)']];
-const dd=viewDropdown(VIEWS,v=>{
+
+/* --- tampilan dipilih lewat sub-menu sidebar (?v=rekap|daftar|live) --- */
+const dd=pageViews([['rekap','Rekap'],['daftar','Daftar Input'],['live','Rekap Realtime (Sisa)']],v=>{
  const show=(id,on)=>document.getElementById(id).style.display=on?'':'none';
  show('rekapView',v==='rekap');show('listView',v==='daftar');show('liveView',v==='live');
- show('byw',v==='rekap');show('xl',v==='rekap');rekapCT.el.style.display=v==='rekap'?'':'none';
  if(v==='live')runLive();});
-document.getElementById('ddslot').append(dd.el);
-document.getElementById('add').onclick=()=>crud.ready.then(()=>crud.openForm());
+addBtn.onclick=()=>crud.ready.then(()=>crud.openForm());
 run();
-if(INIT.pid){picker.set($f.value,$t.value);showPid();dd.set('daftar');}
+if(INIT.pid){showPid();dd.set('daftar');}
 </script>{% endblock %}

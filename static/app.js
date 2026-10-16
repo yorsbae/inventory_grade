@@ -470,126 +470,197 @@ function filterActiveCount(st) {
   if (st.group) n++;
   return n;
 }
-/* Group By ganda: chip + tombol "+ Tambah" membuka daftar centang (Terapkan / Reset). st.group = 'dept,jenis,motif' */
-function groupControl(inst, cfg, onApplied) {
+/* ===== Filter overlay terpadu: SATU tombol "Filter" di semua halaman & sub-menu =====
+   Isi panel (muncul menimpa halaman, bukan di toolbar): Periode · Cari · Group By (boleh lebih dari satu, urutan = urutan klik)
+   · filter per field · rentang Jumlah · Urutkan · isian tambahan khusus halaman.
+   inst: objek dengan inst.pstate ({q,filters,ranges,sort,dir,group}) dan, bila ada periode, inst.range ({from,to}).
+   cfg : title, range (override), noRange, groupFields (array / fungsi), defaultGroup, searchPlaceholder, fields, fetchDistinct,
+         rangeField, sortFields, extra() -> {els, apply(), reset(), active()}, onApply() (bila kosong: inst.page=1; inst.load()). */
+function filterPanel(inst, cfg) {
   const st = inst.pstate;
-  const sel = () => (st.group || '').split(',').filter(Boolean);
-  const lbl = n => (cfg.groupFields.find(f => f.n === n) || { l: n }).l;
-  const chips = h('div', { class: 'gchips' });
-  const pop = h('div', { class: 'colpop gpop' });
-  const add = h('button', { type: 'button', class: 'btn sm' }, '+ Tambah');
-  let pick = [];
-  const apply = () => { draw(); onApplied(); inst.page = 1; inst.load(); };
-  const draw = () => {
-    chips.innerHTML = '';
-    for (const n of sel()) chips.append(h('span', { class: 'gchip' }, lbl(n),
-      h('button', { type: 'button', title: 'Hapus', onclick: () => { st.group = sel().filter(x => x !== n).join(','); apply(); } }, '×')));
-    if (!sel().length) chips.append(h('small', { class: 'hint', style: 'margin:0' }, 'Tidak ada'));
-  };
-  const build = () => {
-    pick = sel(); pop.innerHTML = '';
-    const list = h('div', { class: 'gchecks' });
-    for (const f of cfg.groupFields) {
-      const cb = h('input', { type: 'checkbox', checked: pick.includes(f.n) });
-      cb.onchange = () => { pick = cb.checked ? pick.concat(f.n) : pick.filter(x => x !== f.n); };
-      list.append(h('label', {}, cb, f.l));
-    }
-    pop.append(list, h('div', { class: 'gact' },
-      h('button', { type: 'button', class: 'btn primary sm', onclick: () => { st.group = pick.join(','); pop.classList.remove('open'); apply(); } }, 'Terapkan'),
-      h('button', { type: 'button', class: 'btn sm', onclick: () => { st.group = ''; pop.classList.remove('open'); apply(); } }, 'Reset')));
-  };
-  add.onclick = e => { e.stopPropagation(); build(); pop.classList.toggle('open'); };
-  document.addEventListener('click', e => { if (!pop.contains(e.target) && e.target !== add) pop.classList.remove('open'); });
-  draw();
-  return { el: h('div', { class: 'gbar colcheck' }, h('span', { class: 'gbl' }, 'Group By'), chips, add, pop), draw };
-}
-function buildFilterToolbarItem(inst, cfg) {
-  // inst: instance dengan inst.pstate, inst.page, inst.load(). cfg: lihat pemanggilnya (Crud/DocPage).
-  const groupCtl = groupControl(inst, cfg, () => refresh());
-  const btn = h('button', { type: 'button', class: 'btn' }, '🔍 Filter');
+  const range = cfg.range || (inst.range && !cfg.noRange ? inst.range : null);
+  const btn = h('button', { type: 'button', class: 'btn fbtn', title: 'Periode, Group By, dan filter lainnya' }, '🔍 Filter');
   const chipsRow = h('div', { class: 'chips filterchips' });
+  const gfields = () => (typeof cfg.groupFields === 'function' ? cfg.groupFields() : cfg.groupFields) || null;
+  const gList = () => (st.group || '').split(',').filter(Boolean);
+  const nameOf = (list, n) => ((list || []).find(f => f.n === n) || { l: n }).l;
+  const run = () => { refresh(); if (cfg.onApply) cfg.onApply(); else { inst.page = 1; inst.load(); } };
   function refresh() {
-    const n = filterActiveCount(inst.pstate);
+    const gOn = gfields() && st.group && st.group !== (cfg.defaultGroup || '');
+    const n = filterActiveCount(st) - (st.group ? 1 : 0) + (gOn ? gList().length : 0);
     btn.textContent = n ? `🔍 Filter (${n})` : '🔍 Filter';
     chipsRow.innerHTML = '';
-    const st = inst.pstate;
-    const fieldLbl = {}; cfg.fields.forEach(f => { fieldLbl[f.n] = f.l; });
-    const sortLbl = {}; cfg.sortFields.forEach(f => { sortLbl[f.n] = f.l; });
-    const groupLbl = {}; cfg.groupFields.forEach(f => { groupLbl[f.n] = f.l; });
     const chips = [];
+    if (range) chips.push('Periode: ' + (range.from === range.to ? fmtDate(range.from) : fmtDate(range.from) + ' – ' + fmtDate(range.to)));
     if (st.q) chips.push(`Cari: "${st.q}"`);
-    for (const [k, v] of Object.entries(st.filters)) chips.push(`${fieldLbl[k] || k}: ${v[0]}`);
-    for (const [k, r] of Object.entries(st.ranges)) {
-      if (r && (r.min !== undefined || r.max !== undefined))
-        chips.push(`${(cfg.rangeField && cfg.rangeField.n === k) ? cfg.rangeField.l : k}: ${r.min ?? ''}–${r.max ?? ''}`);
-    }
-    if (st.sort) chips.push(`Urut: ${sortLbl[st.sort] || st.sort} ${st.dir === 'asc' ? '↑' : '↓'}`);
-    groupCtl.draw();
+    for (const [k, v] of Object.entries(st.filters)) chips.push(`${nameOf(cfg.fields, k)}: ${v[0]}`);
+    for (const [k, r] of Object.entries(st.ranges))
+      if (r && (r.min !== undefined || r.max !== undefined)) chips.push(`${cfg.rangeField ? cfg.rangeField.l : k}: ${r.min ?? ''}–${r.max ?? ''}`);
+    if (st.sort) chips.push(`Urut: ${nameOf(cfg.sortFields, st.sort)} ${st.dir === 'asc' ? '↑' : '↓'}`);
+    const gf = gfields();
+    if (gf && gList().length) chips.push('Group By: ' + gList().map(g => nameOf(gf, g)).join(' › '));
+    if (cfg.extra) { const x = cfg.extra(); if (x.chip) { const c = x.chip(); if (c) chips.push(c); } }
     for (const c of chips) chipsRow.append(h('span', { class: 'chip' }, c));
   }
-  btn.addEventListener('click', () => openFilterModal(inst, cfg, refresh));
+  function open() {
+    if (document.querySelector('.fpanel')) return;
+    const snap = range ? { from: range.from, to: range.to } : null;
+    const gf = gfields();
+    let pick = gList();
+    const sec = (t, ...kids) => h('section', { class: 'fsec' }, h('h4', {}, t), ...kids);
+    const body = h('div', { class: 'fbody' });
+    if (range) body.append(sec('Periode', h('div', { class: 'fgrid' }, ...periodPicker(range, () => {}).els)));
+    let qInput;
+    if (cfg.searchPlaceholder) {
+      qInput = h('input', { type: 'text', value: st.q, placeholder: cfg.searchPlaceholder });
+      body.append(sec('Cari', qInput));
+    }
+    let gbox;
+    if (gf) {
+      gbox = h('div', { class: 'gchecks' });
+      const draw = () => {
+        gbox.innerHTML = '';
+        for (const f of gf) {
+          const i = pick.indexOf(f.n);
+          const cb = h('input', { type: 'checkbox', checked: i >= 0 });
+          cb.onchange = () => { pick = cb.checked ? pick.concat(f.n) : pick.filter(x => x !== f.n); draw(); };
+          gbox.append(h('label', { class: 'gitem' + (i >= 0 ? ' on' : '') }, cb, f.l, i >= 0 ? h('i', { class: 'gord' }, String(i + 1)) : ''));
+        }
+      };
+      draw();
+      body.append(sec('Group By', h('small', { class: 'hint', style: 'margin:0 0 8px;display:block' },
+        'Boleh pilih lebih dari satu; urutan angka = urutan pengelompokan (kiri ke kanan).'), gbox));
+    }
+    const selects = {};
+    if (cfg.fields && cfg.fields.length) {
+      const grid = h('div', { class: 'fgrid' });
+      for (const f of cfg.fields) {
+        const sel = h('select', {}, h('option', { value: '' }, 'Semua')); sel.disabled = true; selects[f.n] = sel;
+        grid.append(h('label', {}, f.l, sel));
+        Promise.resolve(cfg.fetchDistinct(f.n)).then(vals => {
+          sel.disabled = false; const cur = (st.filters[f.n] || [])[0];
+          for (const v of vals) sel.append(h('option', { value: v, selected: cur === v }, v));
+        });
+      }
+      let minInp, maxInp;
+      if (cfg.rangeField) {
+        const r = st.ranges[cfg.rangeField.n] || {};
+        minInp = h('input', { type: 'number', value: r.min ?? '', placeholder: 'Minimal' });
+        maxInp = h('input', { type: 'number', value: r.max ?? '', placeholder: 'Maksimal' });
+        grid.append(h('label', {}, cfg.rangeField.l + ' Minimal', minInp), h('label', {}, cfg.rangeField.l + ' Maksimal', maxInp));
+      }
+      body.append(sec('Filter', grid));
+      body._rng = [minInp, maxInp];
+    }
+    let sortSel, dirSel;
+    if (cfg.sortFields && cfg.sortFields.length) {
+      sortSel = h('select', {}, h('option', { value: '' }, 'Default'), cfg.sortFields.map(f => h('option', { value: f.n, selected: st.sort === f.n }, f.l)));
+      dirSel = h('select', {}, h('option', { value: 'desc', selected: st.dir !== 'asc' }, 'Descending ↓'), h('option', { value: 'asc', selected: st.dir === 'asc' }, 'Ascending ↑'));
+      body.append(sec('Urutkan', h('div', { class: 'fgrid' }, h('label', {}, 'Urut berdasarkan', sortSel), h('label', {}, 'Urutan', dirSel))));
+    }
+    const ex = cfg.extra ? cfg.extra() : null;
+    if (ex && ex.els) body.append(sec('Lainnya', h('div', { class: 'fgrid' }, ...ex.els)));
+
+    let closed = false;
+    const close = cancel => {
+      if (closed) return; closed = true;
+      if (cancel && snap) { range.from = snap.from; range.to = snap.to; }
+      document.removeEventListener('keydown', onKey); back.remove(); pop.remove();
+    };
+    const onKey = e => { if (e.key === 'Escape') close(true); };
+    const apply = () => {
+      if (qInput) st.q = qInput.value.trim();
+      if (gbox) st.group = pick.join(',');
+      if (cfg.fields) {
+        st.filters = {};
+        for (const f of cfg.fields) if (selects[f.n].value) st.filters[f.n] = [selects[f.n].value];
+        st.ranges = {};
+        if (cfg.rangeField && body._rng) {
+          const [mn, mx] = body._rng, r = {};
+          if (mn.value !== '') r.min = mn.value; if (mx.value !== '') r.max = mx.value;
+          if (r.min !== undefined || r.max !== undefined) st.ranges[cfg.rangeField.n] = r;
+        }
+      }
+      if (sortSel) { st.sort = sortSel.value; st.dir = dirSel.value; }
+      if (ex && ex.apply) ex.apply();
+      close(false); run();
+    };
+    const reset = () => {
+      const keepRange = range ? { from: range.from, to: range.to } : null;
+      Object.assign(st, newFilterState()); st.group = cfg.defaultGroup || '';
+      if (ex && ex.reset) ex.reset();
+      if (keepRange) { range.from = keepRange.from; range.to = keepRange.to; }
+      close(false); run();
+    };
+    const back = h('div', { class: 'fback', onclick: () => close(true) });
+    const pop = h('div', { class: 'fpanel', role: 'dialog', 'aria-label': 'Filter ' + (cfg.title || '') },
+      h('div', { class: 'fhead' }, h('b', {}, 'Filter' + (cfg.title ? ' — ' + cfg.title : '')),
+        h('button', { type: 'button', class: 'ibtn mut', title: 'Tutup', onclick: () => close(true) }, '✕')),
+      body,
+      h('div', { class: 'ffoot' },
+        h('button', { type: 'button', class: 'btn', onclick: reset }, 'Reset'), h('span', { class: 'grow' }),
+        h('button', { type: 'button', class: 'btn', onclick: () => close(true) }, 'Batal'),
+        h('button', { type: 'button', class: 'btn primary', onclick: apply }, 'Terapkan')));
+    document.body.append(back, pop);
+    document.addEventListener('keydown', onKey);
+    const r = btn.getBoundingClientRect(), w = Math.min(600, innerWidth - 24);
+    pop.style.width = w + 'px';
+    pop.style.left = Math.max(12, Math.min(r.left, innerWidth - w - 12)) + 'px';
+    const top = r.bottom + 6 > innerHeight - 320 ? 12 : r.bottom + 6;
+    pop.style.top = top + 'px'; pop.style.maxHeight = (innerHeight - top - 16) + 'px';
+    if (qInput) qInput.focus();
+  }
+  btn.addEventListener('click', open);
   inst._refreshFilterUI = refresh;
   refresh();
-  return { btn: h('span', { style: 'display:contents' }, groupCtl.el, btn), chipsRow };
+  return { btn, chipsRow, refresh, open };
 }
-function openFilterModal(inst, cfg, refreshToolbar) {
-  const st = inst.pstate;
-  const qInput = h('input', { type: 'text', value: st.q, placeholder: cfg.searchPlaceholder || 'Cari…' });
-  const grid = h('div', { class: 'form-grid' });
-  const selects = {};
-  for (const f of cfg.fields) {
-    const sel = h('select', {}, h('option', { value: '' }, 'Semua'));
-    sel.disabled = true;
-    selects[f.n] = sel;
-    grid.append(h('label', {}, f.l, sel));
-    cfg.fetchDistinct(f.n).then(vals => {
-      sel.disabled = false;
-      const cur = (st.filters[f.n] || [])[0];
-      for (const v of vals) sel.append(h('option', { value: v, selected: cur === v }, v));
-    });
-  }
-  let minInp, maxInp;
-  if (cfg.rangeField) {
-    const r = st.ranges[cfg.rangeField.n] || {};
-    minInp = h('input', { type: 'number', value: r.min ?? '', placeholder: 'Minimal' });
-    maxInp = h('input', { type: 'number', value: r.max ?? '', placeholder: 'Maksimal' });
-    grid.append(h('label', {}, cfg.rangeField.l + ' Minimal', minInp), h('label', {}, cfg.rangeField.l + ' Maksimal', maxInp));
-  }
-  const sortSel = h('select', {}, h('option', { value: '' }, 'Default'),
-    cfg.sortFields.map(f => h('option', { value: f.n, selected: st.sort === f.n }, f.l)));
-  const dirSel = h('select', {}, h('option', { value: 'desc', selected: st.dir !== 'asc' }, 'Descending ↓'),
-    h('option', { value: 'asc', selected: st.dir === 'asc' }, 'Ascending ↑'));
-  const body = h('div', {},
-    h('label', { class: 'span2' }, 'Cari', qInput),
-    grid,
-    h('h3', { class: 'sub' }, 'Urutkan'),
-    h('div', { class: 'form-grid' },
-      h('label', {}, 'Urut berdasarkan', sortSel), h('label', {}, 'Urutan', dirSel)));
-  const apply = () => {
-    st.q = qInput.value.trim();
-    st.filters = {};
-    for (const f of cfg.fields) if (selects[f.n].value) st.filters[f.n] = [selects[f.n].value];
-    st.ranges = {};
-    if (cfg.rangeField) {
-      const r = {};
-      if (minInp.value !== '') r.min = minInp.value;
-      if (maxInp.value !== '') r.max = maxInp.value;
-      if (r.min !== undefined || r.max !== undefined) st.ranges[cfg.rangeField.n] = r;
-    }
-    st.sort = sortSel.value; st.dir = dirSel.value;
-    modal.close(); refreshToolbar(); inst.page = 1; inst.load();
+function buildFilterToolbarItem(inst, cfg) {   // dipakai Crud (Produksi) & DocPage (Barang Masuk/Keluar)
+  const p = filterPanel(inst, cfg);
+  return { btn: p.btn, chipsRow: p.chipsRow };
+}
+
+/* sel-sel kolom pengelompok pada tabel rekap (1 kolom per dimensi Group By). dims: [{k,l}] dari API; baris: x.grp (1 dimensi) / x.g0..gN (ganda) */
+function grpHeads(dims, cls) { return dims.map(d => h('th', { class: cls || '' }, d.l)); }
+function grpTds(dims, x) {
+  return dims.map((d, i) => {
+    let v = dims.length > 1 ? x['g' + i] : x.grp;
+    if (x.total && dims.length > 1 && i > 0) v = '';
+    else if (v == null) v = '';
+    else if (!x.total && !x.awal) v = (d.k === 'tgl_masuk_sanggan' && v === '-') ? '(tanpa tgl masuk sanggan)' : (/^\d{4}-\d\d-\d\d$/.test(v) ? fmtDate(v) : v);
+    return h('td', { 'data-label': d.l }, v);
+  });
+}
+
+/* ===== Sub-menu sidebar: ?v=<tampilan>. Halaman memanggil pageViews(); klik sub-menu di halaman yang sama = ganti tampilan tanpa reload ===== */
+function navMark(v) {
+  document.querySelectorAll('.subnav a').forEach(a => a.classList.toggle('on', a.dataset.v === v && a.closest('.navg').classList.contains('open')));
+}
+function pageViews(items, onPick) {
+  const valid = v => items.some(i => i[0] === v);
+  const fromUrl = () => { const v = new URLSearchParams(location.search).get('v'); return valid(v) ? v : items[0][0]; };
+  let cur = null;
+  const set = (v, mode) => {
+    if (!valid(v)) v = items[0][0];
+    cur = v; navMark(v);
+    if (mode) { const u = new URL(location.href); u.searchParams.set('v', v); history[mode === 'push' ? 'pushState' : 'replaceState']({}, '', u); }
+    onPick(v);
   };
-  const foot = [
-    h('button', { class: 'btn', onclick: () => {
-      const keepGroup = st.group; Object.assign(st, newFilterState()); st.group = keepGroup;
-      modal.close(); refreshToolbar(); inst.page = 1; inst.load();
-    } }, 'Reset'),
-    h('span', { class: 'grow' }),
-    h('button', { class: 'btn', onclick: () => modal.close() }, 'Batal'),
-    h('button', { class: 'btn primary', onclick: apply }, 'Terapkan Filter')
-  ];
-  const modal = openModal('Filter ' + cfg.title, body, foot);
+  document.addEventListener('click', e => {
+    const a = e.target.closest && e.target.closest('.subnav a');
+    if (!a || a.pathname !== location.pathname || e.metaKey || e.ctrlKey || e.shiftKey) return;
+    e.preventDefault(); document.body.classList.remove('menu-open'); set(a.dataset.v, 'push');
+  });
+  window.addEventListener('popstate', () => set(fromUrl()));
+  set(fromUrl());
+  return { set: v => set(v, 'replace'), get value() { return cur; } };
 }
+/* buka/tutup grup sub-menu: klik panah = buka/tutup; klik induk di halaman aktif = buka/tutup */
+document.addEventListener('click', e => {
+  const p = e.target.closest && e.target.closest('.navp'); if (!p) return;
+  const g = p.closest('.navg'), onChev = e.target.closest('.chev');
+  if (onChev || g.classList.contains('open') && p.dataset.k === g.dataset.cur) { e.preventDefault(); g.classList.toggle('open'); }
+});
 
 
 /* ===== Pilih (checkbox) + Hapus terpilih. Pilihan hanya untuk baris di halaman yang tampil; hilang saat data dimuat ulang. =====
@@ -707,13 +778,13 @@ class Crud {
     this.impBox = h('div', { class: 'imp' });
     const tb = h('div', { class: 'toolbar' });
     if (!this.o.hideAdd) tb.append(h('button', { class: 'btn primary', onclick: () => this.openForm() }, '+ Tambah'));
-    if (m.datecol && !this.o.noRange) tb.append(...rangeInputs(this.range, () => { this.page = 1; this.load(); }));
+    if (m.datecol && !this.o.noRange && !this.pstate) tb.append(...rangeInputs(this.range, () => { this.page = 1; this.load(); }));
     if (this.pstate) {
       tb.append(h('span', { class: 'grow' }));
       const io = ioTools(this.key, () => { this.load(); if (this.o.onChange) this.o.onChange(); }, this.notify, this.impBox, true);
       this.exp = io.exp;
-      const fi = buildFilterToolbarItem(this, this.o.filterPanel);
-      tb.append(fi.btn, ...io.els);
+      const fi = buildFilterToolbarItem(this, Object.assign({ noRange: !m.datecol || !!this.o.noRange }, this.o.filterPanel));
+      tb.prepend(fi.btn); tb.append(...io.els);
       this.chipsRow = fi.chipsRow;
       this.ct = colToggle(this.key, () => this.applyVis()); this.ct.offset = 1; this.ct.setCols(m.cols); tb.append(this.ct.el);
     } else {
@@ -922,7 +993,6 @@ class DocPage {
     this.chipsRow = fi.chipsRow;
     const tb = h('div', { class: 'toolbar' },
       h('button', { class: 'btn primary', onclick: () => this.openForm() }, '+ Tambah ' + this.label),
-      ...rangeInputs(this.range, () => { this.page = 1; this.load(); }),
       fi.btn,
       h('span', { class: 'grow' }));
     const io = ioTools(this.arah, () => this.load(), this.notify, this.impBox, true);
@@ -1172,34 +1242,34 @@ function viewDropdown(items, onPick, initial) {
 /* Stok Pengrajin (halaman Barang Keluar): total dikirim ke pengrajin - total kembali (Barang Masuk), per Motif & Ket */
 class PengrajinStok {
   constructor(root) {
-    this.root = root; this.st = { to: todayISO(), q: '', pengrajin: '', all: false }; this.range = { from: todayISO(), to: todayISO() }; this.build(); this.load();
+    this.root = root; this.pstate = newFilterState(); this.all = false; this.range = { from: todayISO(), to: todayISO() };
+    this.build(); this.load();
   }
   params() {
-    const p = new URLSearchParams({ to: this.st.to });
-    if (this.st.q) p.set('q', this.st.q);
-    if (this.st.pengrajin) p.set('pengrajin', this.st.pengrajin);
-    if (this.st.all) p.set('all', '1');
+    const p = new URLSearchParams({ to: this.range.to });
+    if (this.pstate.q) p.set('q', this.pstate.q);
+    const pg = (this.pstate.filters.pengrajin || [])[0]; if (pg) p.set('pengrajin', pg);
+    if (this.all) p.set('all', '1');
     return p;
   }
   build() {
-    const st = this.st;
-    const pk = periodPicker(this.range, () => { st.to = this.range.to; this.load(); });   // stok dihitung s/d akhir periode
-    const q = h('input', { type: 'search', placeholder: 'Cari pengrajin, motif, ket…' });
-    let t; q.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => { st.q = q.value.trim(); this.load(); }, 300); });
-    const sel = h('select', {}, h('option', { value: '' }, 'Semua Pengrajin'));
-    sel.onchange = () => { st.pengrajin = sel.value; this.load(); };
-    catOptions('pengrajin').then(list => list.forEach(v => sel.append(h('option', { value: v }, v))));
-    const all = h('input', { type: 'checkbox' });
-    all.onchange = () => { st.all = all.checked; this.load(); };
+    const fp = filterPanel(this, {
+      title: 'Stok Pengrajin', searchPlaceholder: 'Cari pengrajin, motif, ket…',
+      fields: [{ n: 'pengrajin', l: 'Pengrajin' }], fetchDistinct: () => catOptions('pengrajin'),
+      extra: () => {
+        const cb = h('input', { type: 'checkbox', checked: this.all });
+        return { els: [h('label', { class: 'colitem' }, cb, 'Tampilkan stok 0')], apply: () => { this.all = cb.checked; }, reset: () => { this.all = false; },
+          chip: () => this.all ? 'Termasuk stok 0' : '' };
+      },
+      onApply: () => this.load()
+    });
     this.exp = h('a', { class: 'btn' }, 'Export Excel');
     this.table = h('table', { class: 'resp' });
     this.chips = h('div', { class: 'chips' });
     this.root.append(
-      h('div', { class: 'toolbar' }, ...pk.els, h('label', {}, 'Pengrajin', sel),
-        h('label', { class: 'searchbox' }, 'Cari', q),
-        h('label', { class: 'colitem' }, all, 'Tampilkan stok 0'), h('span', { class: 'grow' }), this.exp),
+      h('div', { class: 'toolbar' }, fp.btn, h('span', { class: 'grow' }), this.exp), fp.chipsRow,
       h('p', { class: 'hint' }, 'Stok Pengrajin = jumlah Barang Keluar ke pengrajin itu dikurangi Barang Masuk darinya, per Motif dan Ket ' +
-        '(dihitung dari seluruh transaksi s/d tanggal akhir periode di atas, default hari ini). Contoh: keluar 600, masuk 500 → stok di pengrajin 100. ' +
+        '(dihitung dari seluruh transaksi s/d tanggal akhir periode, default hari ini). Contoh: keluar 600, masuk 500 → stok di pengrajin 100. ' +
         'Bila Ket saat kembali berbeda dari Ket saat dikirim (mis. Belum Neci → Sudah Neci), atur di DB › Pemetaan Keluar → Masuk. ' +
         'Barang Keluar/Masuk tanpa Nama Pengrajin tidak ikut dihitung.'),
       this.chips, h('div', { class: 'tablewrap' }, this.table));
@@ -1228,33 +1298,34 @@ class PengrajinStok {
 /* Ringkas Barang Masuk / Barang Keluar: dikelompokkan per Tanggal, Dept, Jenis, Motif, Ket, atau Pengrajin (Baris, SSTB, Jumlah) */
 class DocRekap {
   constructor(root, arah) {
-    this.root = root; this.arah = arah; this.range = { from: todayISO(), to: todayISO() }; this.build(); this.load();
+    this.root = root; this.arah = arah; this.range = { from: todayISO(), to: todayISO() };
+    this.pstate = Object.assign(newFilterState(), { group: 'motif' }); this.build(); this.load();
   }
   build() {
-    const pk = periodPicker(this.range, () => this.load());
-    this.by = h('select', {}, [['motif', 'Motif'], ['jenis', 'Jenis'], ['tanggal', 'Tanggal'], ['dept', 'Dept'], ['ket', 'Ket'], ['pengrajin', 'Nama Pengrajin']]
-      .map(([v, l]) => h('option', { value: v }, l)));
-    this.by.onchange = () => this.load();
+    const fp = filterPanel(this, {
+      title: 'Ringkas ' + (this.arah === 'masuk' ? 'Barang Masuk' : 'Barang Keluar'), defaultGroup: 'motif',
+      groupFields: [['motif', 'Motif'], ['jenis', 'Jenis'], ['tanggal', 'Tanggal'], ['dept', 'Dept'], ['ket', 'Ket'], ['pengrajin', 'Nama Pengrajin']].map(([n, l]) => ({ n, l })),
+      onApply: () => this.load()
+    });
     this.exp = h('a', { class: 'btn' }, 'Export Excel');
     this.table = h('table'); this.chips = h('div', { class: 'chips' });
     this.root.append(
-      h('div', { class: 'toolbar' }, ...pk.els, h('label', {}, 'Kelompokkan per', this.by), h('span', { class: 'grow' }), this.exp),
-      h('p', { class: 'hint' }, `Ringkasan ${this.arah === 'masuk' ? 'Barang Masuk' : 'Barang Keluar'} pada periode di atas (default hari ini), dikelompokkan per Motif, Jenis, Tanggal, Dept, Ket, atau Nama Pengrajin. ` +
+      h('div', { class: 'toolbar' }, fp.btn, h('span', { class: 'grow' }), this.exp), fp.chipsRow,
+      h('p', { class: 'hint' }, `Ringkasan ${this.arah === 'masuk' ? 'Barang Masuk' : 'Barang Keluar'} pada periode terpilih (default hari ini), dikelompokkan menurut Group By di tombol Filter (boleh lebih dari satu). ` +
         'Baris = jumlah baris barang, SSTB = jumlah SSTB berbeda, Jumlah = total barang.'),
       this.chips, h('div', { class: 'tablewrap' }, this.table));
   }
   async load() {
-    const q = new URLSearchParams({ from: this.range.from, to: this.range.to, by: this.by.value });
+    const q = new URLSearchParams({ from: this.range.from, to: this.range.to, by: this.pstate.group || 'motif' });
     this.exp.href = `/export/rekap?arah=${this.arah}&` + q;
     const r = await (await fetch(`/api/rekap/${this.arah}?` + q)).json();
     const tb = this.table; tb.innerHTML = '';
-    const heads = [[r.label, ''], ['Baris', 'num'], ['SSTB', 'num'], ['Jumlah', 'num']];
-    tb.append(h('thead', {}, h('tr', {}, heads.map(([x, c]) => h('th', { class: c }, x)))));
+    const dims = r.dims;
+    tb.append(h('thead', {}, h('tr', {}, grpHeads(dims), ['Baris', 'SSTB', 'Jumlah'].map(x => h('th', { class: 'num' }, x)))));
     const body = h('tbody');
-    if (!r.rows.length) body.append(h('tr', {}, h('td', { colspan: 4, class: 'empty' }, 'Tidak ada data pada periode ini.')));
+    if (!r.rows.length) body.append(h('tr', {}, h('td', { colspan: dims.length + 3, class: 'empty' }, 'Tidak ada data pada periode ini.')));
     for (const x of r.rows) {
-      body.append(h('tr', { class: x.total ? 'total' : '' },
-        h('td', { 'data-label': r.label }, this.by.value === 'tanggal' && !x.total ? fmtDate(x.grp) : x.grp),
+      body.append(h('tr', { class: x.total ? 'total' : '' }, grpTds(dims, x),
         h('td', { class: 'num', 'data-label': 'Baris' }, fmtNum(x.baris)), h('td', { class: 'num', 'data-label': 'SSTB' }, fmtNum(x.sstb)),
         h('td', { class: 'num', 'data-label': 'Jumlah' }, h('b', {}, fmtNum(x.jumlah)))));
     }

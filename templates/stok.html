@@ -11,10 +11,10 @@
  <span class="grow"></span>
  <a class="btn" id="xl">Export Excel</a>
 </div>
-<p class="hint">Saldo Awal = Saldo Akhir hari sebelumnya. Dihitung dari transaksi, jadi koreksi data lama otomatis mengubah saldo hari-hari sesudahnya.
+<details class="tip"><summary>Petunjuk penggunaan</summary><p>Saldo Awal = Saldo Akhir hari sebelumnya. Dihitung dari transaksi, jadi koreksi data lama otomatis mengubah saldo hari-hari sesudahnya.
  <b>Ringkas</b> bisa dikelompokkan per <b>Motif</b>, <b>Jenis</b> (gabungan semua motif sejenis), <b>Tanggal</b> (satu baris per hari yang ada aktivitas, saldo berantai) atau
  per <b>Dept</b> / <b>Ket</b> / <b>Pengrajin</b> (hanya Masuk, Keluar, dan Selisih karena saldo tidak berlaku per dept/ket/pengrajin).
- Kolom "Dari Dept"/"Ke Dept" menunjukkan asal/tujuan barang pada periode yang ditampilkan. Mode "Per hari per motif" menampilkan rincian tanggal x motif yang ada aktivitas.</p>
+ Kolom "Dari Dept"/"Ke Dept" menunjukkan asal/tujuan barang pada periode yang ditampilkan. Mode "Per hari per motif" menampilkan rincian tanggal x motif yang ada aktivitas.</p></details>
 <div class="tablewrap"><table id="tb" class="resp"></table></div>
 {% endblock %}
 {% block script %}<script>

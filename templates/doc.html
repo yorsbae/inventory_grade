@@ -1,12 +1,12 @@
 {% extends "base.html" %}
-{% block body %}<p class="hint" id="dochint">Satu SSTB bisa berisi beberapa motif (motif A, B, C…) dalam satu sesi: isi SSTB, tanggal, dept, pengrajin sekali, lalu tambahkan satu baris per motif (Ket otomatis mengikuti baris sebelumnya). Mengetik nomor SSTB yang sudah ada akan membuka SSTB itu agar tinggal menambah motif. Daftar menampilkan hari ini dan 25 baris per halaman; ubah Periode di atas (Harian, Bulanan, atau Rentang tanggal), atau buka tombol "🔍 Filter" untuk mencari, memfilter per field, mengurutkan, dan mengelompokkan data. "Cetak" pada tiap baris mencetak SSTB. Link Produksi (opsional) menandai barang keluar ini berasal dari input produksi yang mana.{% if arah == 'masuk' %} Kolom Keterangan Produksi menunjukkan berapa yang sudah dikerjakan di halaman Produksi (lewat Link Barang Masuk, per SSTB untuk semua motifnya) dan berapa sisanya.{% endif %}</p>
-<div class="toolbar"><span id="ddslot"></span></div>
+{% block body %}<details class="tip" id="dochint"><summary>Petunjuk penggunaan</summary><p>Satu SSTB bisa berisi beberapa motif (motif A, B, C…) dalam satu sesi: isi SSTB, tanggal, dept, pengrajin sekali, lalu tambahkan satu baris per motif (Ket otomatis mengikuti baris sebelumnya). Mengetik nomor SSTB yang sudah ada akan membuka SSTB itu agar tinggal menambah motif. Daftar menampilkan hari ini dan 25 baris per halaman; ubah Periode di atas (Harian, Bulanan, atau Rentang tanggal), atau buka tombol "🔍 Filter" untuk mencari, memfilter per field, mengurutkan, dan mengelompokkan data. "Cetak" pada tiap baris mencetak SSTB. Link Produksi (opsional) menandai barang keluar ini berasal dari input produksi yang mana.{% if arah == 'masuk' %} Kolom Keterangan Produksi menunjukkan berapa yang sudah dikerjakan di halaman Produksi (lewat Link Barang Masuk, per SSTB untuk semua motifnya) dan berapa sisanya.{% endif %}</p></details>
+<div class="toolbar plain"><span id="ddslot"></span></div>
 <div id="doc"></div>
 <div id="rekap" style="display:none"></div>
 {% if arah == 'keluar' %}<div id="peng" style="display:none"></div>{% endif %}{% endblock %}
 {% block script %}<script>new DocPage(document.getElementById('doc'), '{{ arah }}', {{ init|tojson }});
 let rekapV=null{% if arah == 'keluar' %}, pengStok=null{% endif %};
-const VIEWS=[['daftar','Daftar {{ title }} (SSTB)'],['ringkas','Ringkas {{ title }}']{% if arah == 'keluar' %},['stok','Stok Pengrajin']{% endif %}];
+const VIEWS=[['daftar','Daftar SSTB {{ label }}'],['ringkas','Ringkas {{ label }}']{% if arah == 'keluar' %},['stok','Stok Pengrajin']{% endif %}];
 document.getElementById('ddslot').append(viewDropdown(VIEWS,v=>{
  const show=(id,on)=>{const e=document.getElementById(id);if(e)e.style.display=on?'':'none';};
  show('doc',v==='daftar');show('dochint',v==='daftar');show('rekap',v==='ringkas');show('peng',v==='stok');

@@ -4,9 +4,25 @@
 <title>{{ title }} - Stok Grade</title>
 <link rel="stylesheet" href="/static/style.css">
 </head><body class="login-page">
+<div class="login-hero">
+ <div class="login-hero-in">
+  <div class="login-logo"><svg viewBox="0 0 24 24"><path d="M12 2l9 5v10l-9 5-9-5V7z"/><path d="M12 12l9-5M12 12v10M12 12L3 7"/></svg></div>
+  <div class="login-name">STOK GRADE</div>
+  <p>Kelola barang masuk, produksi, barang keluar, dan laporan stok dengan lebih mudah.</p>
+ </div>
+ <svg class="login-art" viewBox="0 0 600 220" preserveAspectRatio="xMidYMax slice" aria-hidden="true">
+  <rect x="0" y="170" width="600" height="50" fill="rgba(11,42,91,.35)"/>
+  <rect x="40" y="90" width="330" height="90" rx="3" fill="rgba(255,255,255,.92)"/>
+  <rect x="40" y="76" width="330" height="18" fill="rgba(255,255,255,.7)"/>
+  <g fill="rgba(30,91,216,.55)"><rect x="60" y="112" width="60" height="68"/><rect x="132" y="112" width="60" height="68"/><rect x="204" y="112" width="60" height="68"/><rect x="276" y="112" width="60" height="68"/></g>
+  <rect x="400" y="120" width="150" height="60" rx="3" fill="rgba(255,255,255,.75)"/>
+  <rect x="418" y="140" width="40" height="40" fill="rgba(30,91,216,.5)"/><rect x="470" y="140" width="64" height="40" fill="rgba(30,91,216,.35)"/>
+ </svg>
+</div>
+<div class="login-side">
 <div class="login-box">
-<div class="login-brand">Stok Grade</div>
-<h1>{{ title }}</h1>
+<h1>{{ 'Masuk ke Stok Grade' if mode == 'login' else title }}</h1>
+{% if mode == 'login' %}<p class="login-sub">Silakan login untuk melanjutkan</p>{% endif %}
 {% if err %}<div class="login-err">{{ err }}</div>{% endif %}
 {% if ok %}<div class="login-ok">{{ ok }}</div>{% endif %}
 {% if mode == 'blocked' %}
@@ -15,21 +31,30 @@
 <form method="post" autocomplete="on">
 {% if mode == 'login' %}
 <input type="hidden" name="next" value="{{ next }}">
-<label>Username<input name="username" autocomplete="username" autofocus required></label>
-<label>Password<input name="password" type="password" autocomplete="current-password" required></label>
-<button class="btn primary" type="submit">Masuk</button>
+<label>Username<span class="field"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg><input name="username" placeholder="Masukkan username" autocomplete="username" autofocus required></span></label>
+<label>Password<span class="field"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg><input name="password" id="pw" type="password" placeholder="Masukkan password" autocomplete="current-password" required>
+ <button type="button" class="eye" id="eye" title="Tampilkan / sembunyikan password"><svg viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button></span></label>
+<label class="remember"><input type="checkbox" name="remember" value="1"> Ingat saya</label>
+<button class="btn primary block" type="submit">Masuk</button>
 {% elif mode == 'setup' %}
 <p class="hint">Buat akun untuk mengamankan aplikasi. Semua pengguna memakai akun ini.</p>
 <label>Username<input name="username" autocomplete="username" autofocus required></label>
 <label>Password (min. 6 karakter)<input name="password" type="password" autocomplete="new-password" required minlength="6"></label>
 <label>Ulangi password<input name="password2" type="password" autocomplete="new-password" required minlength="6"></label>
-<button class="btn primary" type="submit">Buat akun</button>
+<button class="btn primary block" type="submit">Buat akun</button>
 {% else %}
 <label>Password lama<input name="old" type="password" autocomplete="current-password" autofocus required></label>
 <label>Password baru (min. 6 karakter)<input name="password" type="password" autocomplete="new-password" required minlength="6"></label>
 <label>Ulangi password baru<input name="password2" type="password" autocomplete="new-password" required minlength="6"></label>
-<button class="btn primary" type="submit">Simpan</button> <a class="btn" href="/">Kembali</a>
+<div class="login-actions"><a class="btn" href="/">Kembali</a><button class="btn primary" type="submit">Simpan</button></div>
 {% endif %}
 </form>
 {% endif %}
-</div></body></html>
+<div class="login-copy">© 2026 Stok Grade. All rights reserved.</div>
+</div>
+</div>
+<script>
+(function(){var e=document.getElementById('eye'),p=document.getElementById('pw');
+if(e&&p)e.addEventListener('click',function(){p.type=p.type==='password'?'text':'password';});})();
+</script>
+</body></html>

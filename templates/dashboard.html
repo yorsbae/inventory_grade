@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="cards" id="cards"></div>
+<div class="panels">
+ <div class="panel"><h3>Pergerakan Stok <small class="hint" style="margin:0 0 0 6px">30 hari terakhir</small></h3>
+  <div class="legend"><span><i style="background:#1e5bd8"></i>Masuk</span><span><i style="background:#f59e0b"></i>Produksi</span><span><i style="background:#ef4444"></i>Keluar</span></div>
+  <div class="chart" id="line"></div></div>
+ <div class="panel"><h3>Stok per Jenis</h3><div class="donutwrap" id="donut"></div></div>
+</div>
+{% endblock %}
+{% block script %}<script>
+const fmt=n=>(n||0).toLocaleString('id-ID');
+const SV={b:'<svg viewBox="0 0 24 24"><path d="M12 2l9 5v10l-9 5-9-5V7z"/><path d="M12 12l9-5M12 12v10M12 12L3 7"/></svg>',
+ g:'<svg viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>',
+ o:'<svg viewBox="0 0 24 24"><path d="M3 21V10l6 4V10l6 4V6h4a2 2 0 012 2v13H3z"/></svg>',
+ r:'<svg viewBox="0 0 24 24"><path d="M12 15V3m0 0L8 7m4-4l4 4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>'};
+const COLORS=['#1e5bd8','#f59e0b','#16a34a','#8b5cf6','#ef4444','#14b8a6','#64748b'];
+function card(cls,label,val,pct,extra){
+ const d=pct==null?h('div',{class:'sd na'},extra||'Belum ada pembanding'):h('div',{class:'sd '+(pct>=0?'up':'dn')},(pct>=0?'▲ ':'▼ ')+Math.abs(pct).toString().replace('.',',')+'% vs 30 hari lalu');
+ const ic=h('div',{class:'si '+cls});ic.innerHTML=SV[{b:'b',g:'g',o:'o',r:'r'}[cls]];
+ return h('div',{class:'stat'},ic,h('div',{},h('div',{class:'sl'},label),h('div',{class:'sv'},fmt(val)),d));}
+function drawLine(series){
+ const W=640,H=250,L=44,R=10,T=10,B=26,n=series.length;
+ const keys=[['masuk','#1e5bd8'],['produksi','#f59e0b'],['keluar','#ef4444']];
+ let max=Math.max(1,...series.flatMap(x=>keys.map(k=>x[k[0]])));
+ const step=Math.pow(10,Math.floor(Math.log10(max)));const top=Math.ceil(max/step)*step;
+ const X=i=>L+(n<2?0:i*(W-L-R)/(n-1)),Y=v=>T+(H-T-B)*(1-v/top);
+ let g='';
+ for(let i=0;i<=4;i++){const v=top*i/4,y=Y(v);g+=`<line class="gl" x1="${L}" x2="${W-R}" y1="${y}" y2="${y}"/><text x="${L-6}" y="${y+3}" text-anchor="end">${fmt(Math.round(v))}</text>`;}
+ const mn=['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];
+ series.forEach((x,i)=>{if(i%Math.ceil(n/8)===0){const d=x.tgl.split('-');g+=`<text x="${X(i)}" y="${H-8}" text-anchor="middle">${+d[2]} ${mn[+d[1]-1]}</text>`;}});
+ for(const [k,c] of keys){
+  const pts=series.map((x,i)=>X(i).toFixed(1)+','+Y(x[k]).toFixed(1)).join(' ');
+  if(k==='masuk')g+=`<polygon points="${X(0)},${Y(0)} ${pts} ${X(n-1)},${Y(0)}" fill="${c}" fill-opacity=".08" stroke="none"/>`;
+  g+=`<polyline points="${pts}" fill="none" stroke="${c}" stroke-width="2"/>`;}
+ const el=document.getElementById('line');el.innerHTML=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Grafik pergerakan stok">${g}</svg>`;}
+function drawDonut(grades,total){
+ const list=grades.filter(x=>x.stok>0).sort((a,b)=>b.stok-a.stok);
+ let top=list.slice(0,6);const rest=list.slice(6).reduce((s,x)=>s+x.stok,0);if(rest)top.push({jenis:'Lainnya',stok:rest});
+ const sum=top.reduce((s,x)=>s+x.stok,0),box=document.getElementById('donut');box.innerHTML='';
+ if(!sum){box.append(h('p',{class:'hint'},'Belum ada stok untuk ditampilkan.'));return;}
+ const C=2*Math.PI*40;let off=0,arcs='';
+ top.forEach((x,i)=>{const len=C*x.stok/sum;arcs+=`<circle cx="50" cy="50" r="40" fill="none" stroke="${COLORS[i%COLORS.length]}" stroke-width="18" stroke-dasharray="${len} ${C-len}" stroke-dashoffset="${-off}"/>`;off+=len;});
+ const d=h('div',{class:'donut'});d.innerHTML=`<svg viewBox="0 0 100 100">${arcs}</svg>`;
+ d.append(h('div',{class:'dc'},h('b',{},fmt(total)),h('span',{},'Total Stok')));
+ const lg=h('div',{class:'dleg'});
+ top.forEach((x,i)=>{const i2=h('i');i2.style.background=COLORS[i%COLORS.length];lg.append(h('div',{},i2,h('span',{},x.jenis),h('b',{},(x.stok*100/sum).toFixed(1).replace('.',',')+'%')));});
+ box.append(d,lg);}
+(async()=>{
+ const r=await(await fetch('/api/dashboard')).json();
+ const c=document.getElementById('cards');
+ c.append(card('b','Total Stok',r.total_stok,null,r.pending?fmt(r.pending)+' SSTB belum selesai':'Semua SSTB selesai'),
+  card('g','Masuk (30 hari)',r.cur.masuk,r.pct.masuk),card('o','Produksi (30 hari)',r.cur.produksi,r.pct.produksi),card('r','Keluar (30 hari)',r.cur.keluar,r.pct.keluar));
+ drawLine(r.series);drawDonut(r.grades,r.total_stok);
+})();
+</script>{% endblock %}

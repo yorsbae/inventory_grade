@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="infogrid" id="info"></div>
+<div class="tabs" id="tabs"><button data-k="item" class="on">Item</button><button data-k="dok">Dokumen</button><button data-k="riw">Riwayat</button></div>
+<div id="pane"></div>
+{% endblock %}
+{% block script %}<script>
+const ARAH='{{ arah }}',DID={{ doc_id }},LABEL='{{ label }}';
+let D=null,tab='item';
+const info=document.getElementById('info'),pane=document.getElementById('pane');
+const fmtSize=b=>b>1048576?(b/1048576).toFixed(1).replace('.',',')+' MB':Math.max(1,Math.round(b/1024))+' KB';
+const fmtWaktu=w=>{const [d,t]=(w||'').split(' ');return fmtDate(d)+' '+(t||'').slice(0,5);};
+function kv(k,v){return h('div',{},h('div',{class:'k'},k),h('div',{class:'v'},v));}
+function head(){
+ info.innerHTML='';
+ info.append(kv('No SSTB',D.sstb),kv('Tanggal',fmtDate(D.tanggal)),kv('Dept',D.dept),kv('Pengrajin',D.pengrajin||'-'),
+  kv('Total Jumlah',fmtNum(D.total)),kv('Status',badge(D.status)));
+ const a=document.getElementById('pageActions');a.innerHTML='';
+ const sel=h('select',{title:'Ubah status'},D.statuses.map(s=>h('option',{value:s,selected:s===D.status},s)));
+ sel.onchange=async()=>{const r=await fetch(`/api/doc/${ARAH}/${DID}/status`,J('POST',{status:sel.value}));if(r.ok)load();};
+ a.append(h('div',{class:'statusbar'},h('label',{style:'flex-direction:row;align-items:center'},'Status',sel),
+  h('button',{class:'btn',onclick:()=>printSSTB(Object.assign({},D,{items:D.items.map(i=>Object.assign({nama_motif:i.motif},i))}),LABEL,ARAH)},'Cetak'),
+  h('a',{class:'btn',href:`/${ARAH}?sstb=${encodeURIComponent(D.sstb)}`},'Edit di daftar'),
+  h('button',{class:'btn danger',onclick:del},'Hapus'),
+  h('a',{class:'btn',href:'/'+ARAH},'← Kembali')));
+}
+async function del(){
+ if(!(await confirmDelete(`Data SSTB ${D.sstb} beserta semua barisnya akan dihapus secara permanen.`)))return;
+ await fetch(`/api/doc/${ARAH}/${DID}`,{method:'DELETE'});location.href='/'+ARAH;}
+function itemTab(){
+ const keluar=ARAH==='keluar';
+ const th=['No','Kode Barang','Nama Barang','Jenis','Ket','Jumlah'].concat(keluar?['Link Produksi']:[]);
+ const tb=h('table',{class:'resp'},h('thead',{},h('tr',{},th.map((x,i)=>h('th',{class:x==='Jumlah'?'num':''},x)))));
+ const body=h('tbody');
+ D.items.forEach((it,i)=>{body.append(h('tr',{},h('td',{'data-label':'No'},i+1),h('td',{'data-label':'Kode Barang'},it.kode_motif),
+  h('td',{'data-label':'Nama Barang'},it.motif||''),h('td',{'data-label':'Jenis'},it.jenis||''),h('td',{'data-label':'Ket'},it.ket||''),
+  h('td',{class:'num','data-label':'Jumlah'},fmtNum(it.jumlah)),keluar?h('td',{'data-label':'Link Produksi'},it.link_produksi||''):null));});
+ body.append(h('tr',{class:'total'},h('td',{colspan:5},'TOTAL'),h('td',{class:'num'},fmtNum(D.total)),keluar?h('td'):null));
+ tb.append(body);pane.append(h('div',{class:'tablewrap'},tb));}
+function dokTab(){
+ const msg=h('div',{class:'msg'}),note=makeNotifier(msg);
+ const inp=h('input',{type:'file',accept:'.pdf,.png,.jpg,.jpeg,.xlsx,.xls,.csv,.doc,.docx',style:'display:none'});
+ inp.onchange=async()=>{if(!inp.files[0])return;const fd=new FormData();fd.append('file',inp.files[0]);
+  const r=await fetch(`/api/doc/${ARAH}/${DID}/file`,{method:'POST',body:fd});const j=await r.json();
+  if(!r.ok){note(j.error||'Unggah gagal','err');inp.value='';return;}load();};
+ pane.append(h('div',{class:'toolbar'},h('button',{class:'btn primary',onclick:()=>inp.click()},'+ Unggah Dokumen'),inp,
+  h('span',{class:'hint',style:'margin:0'},'PDF, gambar, Excel, atau Word (mis. surat jalan / scan SSTB bertanda tangan).')),msg);
+ if(!D.files.length){pane.append(h('p',{class:'hint'},'Belum ada dokumen terlampir.'));return;}
+ for(const f of D.files){const ic=h('div',{class:'fi'});ic.innerHTML=ICON.file;
+  pane.append(h('div',{class:'dfile'},ic,h('div',{class:'fn'},h('b',{},f.nama),h('small',{},fmtSize(f.ukuran)+' · '+fmtWaktu(f.dibuat))),
+   ibtn('dl','Unduh',null,'/api/file/'+f.id),
+   ibtn('del','Hapus dokumen',async()=>{if(!(await confirmDelete(`Dokumen ${f.nama} akan dihapus.`)))return;await fetch('/api/file/'+f.id,{method:'DELETE'});load();})));}
+}
+function riwTab(){
+ if(!D.riwayat.length){pane.append(h('p',{class:'hint'},'Belum ada riwayat.'));return;}
+ const ul=h('ul',{class:'timeline'});
+ for(const r of D.riwayat)ul.append(h('li',{},h('b',{},r.aksi),h('small',{},fmtWaktu(r.waktu)+' · '+(r.pengguna||'-')),r.ket?h('div',{},r.ket):null));
+ pane.append(h('div',{class:'panel'},ul));}
+function render(){pane.innerHTML='';({item:itemTab,dok:dokTab,riw:riwTab})[tab]();
+ document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('on',b.dataset.k===tab));}
+async function load(){D=await(await fetch(`/api/doc/${ARAH}/${DID}/detail`)).json();head();render();}
+document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{tab=b.dataset.k;render();});
+load();
+</script>{% endblock %}

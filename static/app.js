@@ -30,6 +30,53 @@ const DEFAULT_DAYS = 1, PAGE_SIZES = [25, 50, 100];
 const daysAgo = n => new Date(Date.now() - new Date().getTimezoneOffset() * 60000 - n * 864e5).toISOString().slice(0, 10);
 const defaultFrom = () => daysAgo(DEFAULT_DAYS - 1);
 const J = (method, body) => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+const STATUSES = ['Pending', 'Proses', 'Selesai'];
+
+/* ===== ikon, badge status, tombol aksi ===== */
+const ICON = {
+  edit: '<svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/></svg>',
+  del: '<svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
+  eye: '<svg viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
+  print: '<svg viewBox="0 0 24 24"><path d="M7 9V3h10v6M7 17H5a2 2 0 01-2-2v-4a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2h-2M7 14h10v7H7z"/></svg>',
+  file: '<svg viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6zM14 3v5h5"/></svg>',
+  dl: '<svg viewBox="0 0 24 24"><path d="M12 4v11m0 0l-4-4m4 4l4-4M5 20h14"/></svg>'
+};
+function ibtn(kind, title, onclick, href) {
+  const e = h(href ? 'a' : 'button', { class: 'ibtn' + (kind === 'del' ? ' del' : (kind === 'print' ? ' mut' : '')), title, href: href || null, type: href ? null : 'button', onclick });
+  e.innerHTML = ICON[kind]; return e;
+}
+const badge = v => { v = v || 'Selesai'; return h('span', { class: 'badge ' + String(v).toLowerCase() }, v); };
+
+/* ===== kotak konfirmasi (pengganti confirm() bawaan browser): Promise<boolean> ===== */
+function confirmBox(title, text, o = {}) {
+  return new Promise(res => {
+    const ov = h('div', { class: 'overlay center' });
+    const done = v => { document.removeEventListener('keydown', key, true); ov.remove(); document.body.classList.remove('noscroll'); res(v); };
+    const key = e => { if (e.key === 'Escape') { e.stopPropagation(); done(false); } };
+    const soft = o.danger === false;
+    const ok = h('button', { type: 'button', class: 'btn ' + (soft ? 'primary' : 'danger solid'), onclick: () => done(true) }, o.ok || 'Hapus');
+    const cancel = o.info ? null : h('button', { type: 'button', class: 'btn', onclick: () => done(false) }, o.cancel || 'Batal');
+    ov.append(h('div', { class: 'modal confirm', role: 'alertdialog' },
+      h('div', { class: 'cicon' + (soft ? ' warn' : '') }, soft ? '?' : '!'), h('h2', {}, title), h('p', {}, text),
+      h('div', { class: 'cbtns' + (cancel ? '' : ' one') }, cancel, ok)));
+    ov.addEventListener('mousedown', e => { if (e.target === ov) done(false); });
+    document.body.append(ov); document.body.classList.add('noscroll'); document.addEventListener('keydown', key, true);
+    (cancel || ok).focus();
+  });
+}
+const confirmDelete = (text) => confirmBox('Konfirmasi Hapus Data', (text ? text + '\n' : '') + 'Tindakan ini tidak dapat dibatalkan.');
+
+/* ===== kerangka halaman: menu samping (mobile) + menu pengguna ===== */
+(() => {
+  const mb = document.getElementById('menuBtn'), bg = document.getElementById('sideBg');
+  if (mb) mb.onclick = () => document.body.classList.toggle('menu-open');
+  if (bg) bg.onclick = () => document.body.classList.remove('menu-open');
+  const um = document.getElementById('userMenu'), ub = document.getElementById('userBtn');
+  if (um && ub) {
+    ub.onclick = e => { e.stopPropagation(); um.classList.toggle('open'); };
+    document.addEventListener('click', e => { if (!um.contains(e.target)) um.classList.remove('open'); });
+  }
+})();
 
 /* ===== Combo: kolom pilihan dengan pencarian di server (tidak memuat semua data) ===== */
 class Combo {
@@ -199,12 +246,17 @@ function ioTools(key, onDone, notify, impBox, hideTemplate) {
 function pagerInto(el, page, pages, total, extra, go, size, onSize, unit) {
   el.innerHTML = '';
   const from = total ? (page - 1) * size + 1 : 0, to = Math.min(page * size, total);
+  const id = n => n.toLocaleString('id-ID');
   const sel = h('select', { class: 'pgsize', title: 'Baris per halaman', onchange: () => onSize(parseInt(sel.value)) },
-    PAGE_SIZES.map(n => h('option', { value: n, selected: n === size }, n + ' / hal')));
-  el.append(h('button', { class: 'btn sm', disabled: page <= 1, onclick: () => go(page - 1) }, '‹ Prev'),
-    `Hal ${page} / ${pages}`,
-    h('button', { class: 'btn sm', disabled: page >= pages, onclick: () => go(page + 1) }, 'Next ›'),
-    sel, `· ${from.toLocaleString('id-ID')}–${to.toLocaleString('id-ID')} dari ${total.toLocaleString('id-ID')} ${unit || 'baris'}`, extra || '');
+    PAGE_SIZES.map(n => h('option', { value: n, selected: n === size }, n + ' / halaman')));
+  const want = new Set([1, pages, page - 1, page, page + 1].filter(n => n >= 1 && n <= pages));
+  if (pages <= 7) for (let n = 1; n <= pages; n++) want.add(n);
+  const nums = [...want].sort((a, b) => a - b);
+  const pg = (label, n, on, dis) => h('button', { type: 'button', class: 'pg' + (on ? ' on' : ''), disabled: dis, onclick: () => go(n) }, label);
+  const pgs = h('div', { class: 'pgs' }, pg('‹', page - 1, false, page <= 1));
+  nums.forEach((n, i) => { if (i && n - nums[i - 1] > 1) pgs.append(h('span', { class: 'dots' }, '…')); pgs.append(pg(String(n), n, n === page, false)); });
+  pgs.append(pg('›', page + 1, false, page >= pages));
+  el.append(h('div', { class: 'info' }, `Menampilkan ${id(from)} - ${id(to)} dari ${id(total)} ${unit || 'data'}`, extra || ''), pgs, sel);
 }
 /* ===== Periode: Harian / Bulanan / Rentang tanggal (tgl x s/d y), default hari ini. Dipakai SEMUA halaman. =====
    Mengisi range.from & range.to (YYYY-MM-DD); onChange dipanggil setelah periode berubah. Tombol ‹ › menggeser satu periode. */
@@ -418,8 +470,42 @@ function filterActiveCount(st) {
   if (st.group) n++;
   return n;
 }
+/* Group By ganda: chip + tombol "+ Tambah" membuka daftar centang (Terapkan / Reset). st.group = 'dept,jenis,motif' */
+function groupControl(inst, cfg, onApplied) {
+  const st = inst.pstate;
+  const sel = () => (st.group || '').split(',').filter(Boolean);
+  const lbl = n => (cfg.groupFields.find(f => f.n === n) || { l: n }).l;
+  const chips = h('div', { class: 'gchips' });
+  const pop = h('div', { class: 'colpop gpop' });
+  const add = h('button', { type: 'button', class: 'btn sm' }, '+ Tambah');
+  let pick = [];
+  const apply = () => { draw(); onApplied(); inst.page = 1; inst.load(); };
+  const draw = () => {
+    chips.innerHTML = '';
+    for (const n of sel()) chips.append(h('span', { class: 'gchip' }, lbl(n),
+      h('button', { type: 'button', title: 'Hapus', onclick: () => { st.group = sel().filter(x => x !== n).join(','); apply(); } }, '×')));
+    if (!sel().length) chips.append(h('small', { class: 'hint', style: 'margin:0' }, 'Tidak ada'));
+  };
+  const build = () => {
+    pick = sel(); pop.innerHTML = '';
+    const list = h('div', { class: 'gchecks' });
+    for (const f of cfg.groupFields) {
+      const cb = h('input', { type: 'checkbox', checked: pick.includes(f.n) });
+      cb.onchange = () => { pick = cb.checked ? pick.concat(f.n) : pick.filter(x => x !== f.n); };
+      list.append(h('label', {}, cb, f.l));
+    }
+    pop.append(list, h('div', { class: 'gact' },
+      h('button', { type: 'button', class: 'btn primary sm', onclick: () => { st.group = pick.join(','); pop.classList.remove('open'); apply(); } }, 'Terapkan'),
+      h('button', { type: 'button', class: 'btn sm', onclick: () => { st.group = ''; pop.classList.remove('open'); apply(); } }, 'Reset')));
+  };
+  add.onclick = e => { e.stopPropagation(); build(); pop.classList.toggle('open'); };
+  document.addEventListener('click', e => { if (!pop.contains(e.target) && e.target !== add) pop.classList.remove('open'); });
+  draw();
+  return { el: h('div', { class: 'gbar colcheck' }, h('span', { class: 'gbl' }, 'Group By'), chips, add, pop), draw };
+}
 function buildFilterToolbarItem(inst, cfg) {
   // inst: instance dengan inst.pstate, inst.page, inst.load(). cfg: lihat pemanggilnya (Crud/DocPage).
+  const groupCtl = groupControl(inst, cfg, () => refresh());
   const btn = h('button', { type: 'button', class: 'btn' }, '🔍 Filter');
   const chipsRow = h('div', { class: 'chips filterchips' });
   function refresh() {
@@ -438,13 +524,13 @@ function buildFilterToolbarItem(inst, cfg) {
         chips.push(`${(cfg.rangeField && cfg.rangeField.n === k) ? cfg.rangeField.l : k}: ${r.min ?? ''}–${r.max ?? ''}`);
     }
     if (st.sort) chips.push(`Urut: ${sortLbl[st.sort] || st.sort} ${st.dir === 'asc' ? '↑' : '↓'}`);
-    if (st.group) chips.push(`Kelompok: ${groupLbl[st.group] || st.group}`);
+    groupCtl.draw();
     for (const c of chips) chipsRow.append(h('span', { class: 'chip' }, c));
   }
   btn.addEventListener('click', () => openFilterModal(inst, cfg, refresh));
   inst._refreshFilterUI = refresh;
   refresh();
-  return { btn, chipsRow };
+  return { btn: h('span', { style: 'display:contents' }, groupCtl.el, btn), chipsRow };
 }
 function openFilterModal(inst, cfg, refreshToolbar) {
   const st = inst.pstate;
@@ -473,15 +559,12 @@ function openFilterModal(inst, cfg, refreshToolbar) {
     cfg.sortFields.map(f => h('option', { value: f.n, selected: st.sort === f.n }, f.l)));
   const dirSel = h('select', {}, h('option', { value: 'desc', selected: st.dir !== 'asc' }, 'Descending ↓'),
     h('option', { value: 'asc', selected: st.dir === 'asc' }, 'Ascending ↑'));
-  const groupSel = h('select', {}, h('option', { value: '' }, 'Tidak ada'),
-    cfg.groupFields.map(f => h('option', { value: f.n, selected: st.group === f.n }, f.l)));
   const body = h('div', {},
     h('label', { class: 'span2' }, 'Cari', qInput),
     grid,
-    h('h3', { class: 'sub' }, 'Urutkan & Kelompokkan'),
+    h('h3', { class: 'sub' }, 'Urutkan'),
     h('div', { class: 'form-grid' },
-      h('label', {}, 'Urut berdasarkan', sortSel), h('label', {}, 'Urutan', dirSel),
-      h('label', {}, 'Kelompokkan berdasarkan', groupSel)));
+      h('label', {}, 'Urut berdasarkan', sortSel), h('label', {}, 'Urutan', dirSel)));
   const apply = () => {
     st.q = qInput.value.trim();
     st.filters = {};
@@ -493,12 +576,12 @@ function openFilterModal(inst, cfg, refreshToolbar) {
       if (maxInp.value !== '') r.max = maxInp.value;
       if (r.min !== undefined || r.max !== undefined) st.ranges[cfg.rangeField.n] = r;
     }
-    st.sort = sortSel.value; st.dir = dirSel.value; st.group = groupSel.value;
+    st.sort = sortSel.value; st.dir = dirSel.value;
     modal.close(); refreshToolbar(); inst.page = 1; inst.load();
   };
   const foot = [
     h('button', { class: 'btn', onclick: () => {
-      Object.assign(st, newFilterState());
+      const keepGroup = st.group; Object.assign(st, newFilterState()); st.group = keepGroup;
       modal.close(); refreshToolbar(); inst.page = 1; inst.load();
     } }, 'Reset'),
     h('span', { class: 'grow' }),
@@ -555,7 +638,7 @@ class RowSelect {
   }
   async del() {
     const ids = [...this.sel]; if (!ids.length) return;
-    if (!confirm(`Hapus ${ids.length} ${this.o.unit} terpilih?` + (this.o.unit === 'SSTB' ? '\nSeluruh barang di dalam SSTB itu ikut terhapus.' : '') + '\nTindakan ini tidak bisa dibatalkan.')) return;
+    if (!(await confirmDelete(`${ids.length} ${this.o.unit} terpilih akan dihapus.` + (this.o.unit === 'SSTB' ? '\nSeluruh barang di dalam SSTB itu ikut terhapus.' : '')))) return;
     this.btn.disabled = true;
     try {
       const res = await fetch(this.o.url, J('POST', { ids }));
@@ -582,11 +665,13 @@ function renderGroupedTable(table, rows, groupCol, colspan, rowFn, emptyMsg) {
     table.append(tb);
     return;
   }
+  const gcols = String(groupCol).split(',').filter(Boolean);
+  const keyOf = row => gcols.map(c => { const v = row[c]; return v ? (/^\d{4}-\d\d-\d\d$/.test(v) ? fmtDate(v) : v) : '(kosong)'; }).join(' · ');
   const counts = {};
-  for (const row of rows) { const k = row[groupCol] || '(kosong)'; counts[k] = (counts[k] || 0) + 1; }
+  for (const row of rows) { const k = keyOf(row); counts[k] = (counts[k] || 0) + 1; }
   let curKey = null, tb = null;
   for (const row of rows) {
-    const key = row[groupCol] || '(kosong)';
+    const key = keyOf(row);
     if (key !== curKey) {
       curKey = key;
       const head = h('tr', { class: 'grouphead' }, h('td', { colspan },
@@ -645,7 +730,7 @@ class Crud {
     if (this.pstate) {
       this.theadRow.append(this.rs.head());
       for (const c of m.cols) this.theadRow.append(h('th', { class: this.isInt(c) ? 'num' : '' }, c.l));
-      this.theadRow.append(h('th', {}, 'Aksi'));
+      this.theadRow.append(h('th', { class: 'act' }, 'Aksi'));
     } else {
       this.refreshHead();
     }
@@ -660,7 +745,7 @@ class Crud {
       align: this.isInt(c) ? 'num' : '', sortOn: this.sort === c.n ? this.dir : null,
       onSort: () => { this.dir = (this.sort === c.n && this.dir === 'desc') ? 'asc' : 'desc'; this.sort = c.n; this.load(); }
     }));
-    this.theadRow.append(h('th', {}, 'Aksi'));
+    this.theadRow.append(h('th', { class: 'act' }, 'Aksi'));
   }
   applyVis() { if (this.ct) this.ct.apply(this.table); }
   params(extra) {
@@ -688,7 +773,7 @@ class Crud {
     tr.append(this.rs.cell(row.id));
     for (const c of this.meta.cols) {
       const v = row[c.n];
-      let cell = this.isInt(c) ? fmtNum(v) : c.t === 'date' ? fmtDate(v) : v == null ? '' : v;
+      let cell = this.isInt(c) ? fmtNum(v) : c.t === 'date' ? fmtDate(v) : c.t === 'enum' ? badge(v) : v == null ? '' : v;
       if (c.t === 'linkref' && v) {  // Link Barang Masuk: tampilkan SSTB saja, klik = buka Barang Masuk SSTB itu
         const sstb = String(v).replace(/\s*#\d+\s*$/, '');
         cell = h('a', { class: 'lnk', href: '/masuk?sstb=' + encodeURIComponent(sstb), title: 'Buka Barang Masuk ' + sstb }, sstb);
@@ -696,8 +781,7 @@ class Crud {
       tr.append(h('td', { class: this.isInt(c) ? 'num' : '', 'data-label': c.l }, cell));
     }
     tr.append(h('td', { class: 'act', 'data-label': 'Aksi' },
-      h('button', { class: 'btn sm', onclick: () => this.openForm(row) }, 'Edit'), ' ',
-      h('button', { class: 'btn sm danger', onclick: () => this.del(row) }, 'Hapus')));
+      ibtn('edit', 'Edit', () => this.openForm(row)), ibtn('del', 'Hapus', () => this.del(row))));
     return tr;
   }
   async load() {
@@ -736,6 +820,8 @@ class Crud {
         ctl = new Combo(c.src, { placeholder: c.t === 'linkref' ? 'Opsional — cari & pilih…' : undefined,
           onPick: o => this.onPickField(c, o) });
         el = ctl.el; ctl.input.addEventListener('keydown', onEnter);
+      } else if (c.t === 'enum') {
+        ctl = h('select', {}, (c.opts || []).map(o => h('option', { value: o }, o))); el = ctl;
       } else {
         ctl = h('input', {
           type: c.t === 'date' ? 'date' : c.t === 'int' ? 'number' : 'text', min: c.t === 'int' ? 0 : null,
@@ -752,6 +838,7 @@ class Crud {
     for (const c of m.cols) {
       let v = row ? row[c.n] : (this.sticky[c.n] != null ? this.sticky[c.n] : (c.n === 'tgl_produksi' ? todayISO() : ''));
       if (c.t === 'auto') continue;
+      if (c.t === 'enum' && !v) v = 'Selesai';
       this.f[c.n].value = v == null ? '' : v;
     }
     this.recalcSum();
@@ -779,7 +866,7 @@ class Crud {
     if (again && !editId) this.openForm();
   }
   async del(row) {
-    if (!confirm('Hapus baris ini?')) return;
+    if (!(await confirmDelete('Data ini akan dihapus secara permanen.'))) return;
     const res = await fetch(`/api/${this.key}/${row.id}`, { method: 'DELETE' });
     if (!res.ok) { const r = await res.json(); this.notify(r.errors.join('\n'), 'err'); return; }
     this.load(); if (this.o.onChange) this.o.onChange();
@@ -795,11 +882,14 @@ class DocPage {
     init = init || {};
     this.root = root; this.arah = arah; this.keluar = arah === 'keluar';
     this.label = arah === 'masuk' ? 'Barang Masuk' : 'Barang Keluar';
-    this.cols = DOC_COLS_BASE.concat(this.keluar ? [['link_produksi', 'Link Produksi', 'link']] : [['ket_produksi', 'Keterangan Produksi', 'prod']]);
+    this.cols = DOC_COLS_BASE.concat(this.keluar ? [['link_produksi', 'Link Produksi', 'link']] : [['ket_produksi', 'Keterangan Produksi', 'prod']]).concat([['status', 'Status', 'status']]);
     this.page = 1; this.size = PAGE_SIZES[0]; this.sticky = {};
     this.range = { from: defaultFrom(), to: todayISO() };
     this.rs = new RowSelect({ unit: 'SSTB', notify: (t, c, st) => this.notify(t, c, st), url: `/api/doc/${arah}/bulk_delete`, onDone: () => this.load() });
     this.pstate = newFilterState();
+    if (init.q) {  // dari kotak pencarian di bilah atas: cari di semua tanggal
+      this.pstate.q = init.q; this.range = { from: '2000-01-01', to: todayISO() };
+    }
     if (init.sstb) {  // dibuka dari hyperlink SSTB: filter ke SSTB itu, rentang tanggal menyesuaikan
       this.range = { from: init.tanggal, to: init.tanggal > todayISO() ? init.tanggal : todayISO() };
       this.pstate.filters = { sstb: [init.sstb] };
@@ -812,12 +902,12 @@ class DocPage {
         { n: 'dept', l: 'Departemen' }, { n: 'sstb', l: 'SSTB' },
         { n: 'kode_motif', l: 'Kode Motif' }, { n: 'motif', l: 'Motif' },
         { n: 'jenis', l: 'Jenis' }, { n: 'pengrajin', l: 'Nama Pengrajin' },
-        { n: 'rumus', l: 'Rumus' }, { n: 'ket', l: 'Keterangan' }
+        { n: 'rumus', l: 'Rumus' }, { n: 'ket', l: 'Keterangan' }, { n: 'status', l: 'Status' }
       ].concat(this.keluar ? [{ n: 'link_produksi', l: 'Link Produksi' }] : []),
       rangeField: { n: 'jumlah', l: 'Jumlah SSTB' },
-      sortFields: [['sstb', 'SSTB'], ['tanggal', 'Tanggal'], ['dept', 'Dept'], ['pengrajin', 'Nama Pengrajin'], ['jumlah', 'Jumlah SSTB']]
+      sortFields: [['sstb', 'SSTB'], ['tanggal', 'Tanggal'], ['dept', 'Dept'], ['pengrajin', 'Nama Pengrajin'], ['jumlah', 'Jumlah SSTB'], ['status', 'Status']]
         .concat(this.keluar ? [['link_produksi', 'Link Produksi']] : []).map(([n, l]) => ({ n, l })),
-      groupFields: [['sstb', 'SSTB'], ['tanggal', 'Tanggal'], ['dept', 'Dept'], ['pengrajin', 'Nama Pengrajin']]
+      groupFields: [['dept', 'Dept'], ['tanggal', 'Tanggal'], ['pengrajin', 'Nama Pengrajin'], ['status', 'Status'], ['sstb', 'SSTB']]
         .map(([n, l]) => ({ n, l })),
       fetchDistinct: async col => await (await fetch(`/api/distinct/lines/${this.arah}?col=${col}&` + this.params())).json()
     };
@@ -841,7 +931,7 @@ class DocPage {
     this.ct.setCols(this.cols.map(([n, l]) => ({ n, l }))); tb.append(this.ct.el);
     this.theadRow = h('tr', {}, this.rs.head());
     for (const [n, l, k] of this.cols) this.theadRow.append(h('th', { class: k === 'int' ? 'num' : '' }, l));
-    this.theadRow.append(h('th', {}, 'Aksi'));
+    this.theadRow.append(h('th', { class: 'act' }, 'Aksi'));
     this.tbody = h('tbody'); this.pager = h('div', { class: 'pager' });
     this.table = h('table', { class: 'resp' }, h('thead', {}, this.theadRow), this.tbody);
     this.root.append(tb, this.chipsRow, this.chips, this.msg, this.rs.bar, this.impBox,
@@ -883,13 +973,17 @@ class DocPage {
       if (cell) tr.append(h('td', { class: k === 'int' ? 'num' : '', 'data-label': l }, cell));
       else {
         const v = row[n];
-        tr.append(h('td', { class: 'dl', 'data-label': l }, k === 'date' ? fmtDate(v) : v == null ? '' : v));
+        let content = k === 'date' ? fmtDate(v) : v == null ? '' : v;
+        if (n === 'sstb') content = h('a', { class: 'lnk', href: `/${this.arah}/${row.doc_id}`, title: 'Buka detail SSTB' }, v);
+        else if (k === 'status') content = badge(v);
+        tr.append(h('td', { class: 'dl', 'data-label': l }, content));
       }
     }
     tr.append(h('td', { class: 'act', 'data-label': 'Aksi' },
-      h('button', { class: 'btn sm', title: 'Edit SSTB ini (tambah / ubah motif)', onclick: () => this.openForm(row.doc_id) }, 'Edit'), ' ',
-      h('button', { class: 'btn sm', title: 'Cetak SSTB', onclick: () => this.printRow(row) }, 'Cetak'), ' ',
-      h('button', { class: 'btn sm danger', title: 'Hapus seluruh SSTB ini', onclick: () => this.delDoc(row) }, 'Hapus')));
+      ibtn('eye', 'Lihat detail SSTB', null, `/${this.arah}/${row.doc_id}`),
+      ibtn('edit', 'Edit SSTB ini (tambah / ubah motif)', () => this.openForm(row.doc_id)),
+      ibtn('print', 'Cetak SSTB', () => this.printRow(row)),
+      ibtn('del', 'Hapus seluruh SSTB ini', () => this.delDoc(row))));
     return tr;
   }
   linkEl(it) {  // Link Produksi (Barang Keluar): tampilkan SSTB barang masuk asalnya, klik = buka input produksinya
@@ -936,7 +1030,7 @@ class DocPage {
     printSSTB(d, this.label, this.arah);
   }
   async delDoc(row) {
-    if (!confirm(`Hapus seluruh SSTB ${row.sstb} beserta ${row.items.length} baris barangnya?`)) return;
+    if (!(await confirmDelete(`Data SSTB ${row.sstb} beserta ${row.items.length} baris barangnya akan dihapus secara permanen.`))) return;
     await fetch(`/api/doc/${this.arah}/${row.doc_id}`, { method: 'DELETE' }); this.load();
   }
   async openForm(docId, addMore) {
@@ -948,6 +1042,8 @@ class DocPage {
     const sstb = h('input', { type: 'text', autocomplete: 'off', placeholder: 'mis. 001/PCG-GRD/IX/2026' });
     const tgl = h('input', { type: 'date' });
     const dept = new Combo('dept'), peng = new Combo('pengrajin', { placeholder: 'Boleh kosong' });
+    const status = h('select', {}, STATUSES.map(o => h('option', { value: o }, o)));
+    status.value = doc ? (doc.status || 'Selesai') : 'Selesai';
     sstb.value = doc ? doc.sstb : ''; tgl.value = doc ? doc.tanggal : (st.tanggal || todayISO());
     dept.value = doc ? doc.dept : (st.dept || ''); peng.value = doc ? (doc.pengrajin || '') : '';
     const total = h('b', {}, '0');
@@ -1001,13 +1097,13 @@ class DocPage {
     tgl.addEventListener('change', () => this.rows.forEach(stockHint));
     const lab = (t, el, cls) => h('label', { class: cls || '' }, t, el);
     const body = h('div', {}, fmsg,
-      h('div', { class: 'form-grid' }, lab('SSTB *', sstb), lab('Tanggal *', tgl), lab('Dept *', dept.el), lab('Nama Pengrajin', peng.el)),
+      h('div', { class: 'form-grid' }, lab('SSTB *', sstb), lab('Tanggal *', tgl), lab('Dept *', dept.el), lab('Nama Pengrajin', peng.el), lab('Status', status)),
       h('h3', { class: 'sub' }, 'Barang dalam SSTB ini'), itemsBox,
       h('div', { class: 'items-foot' },
         h('button', { type: 'button', class: 'btn', onclick: () => addRow().motif.focus() }, '+ Tambah baris'),
         h('span', { class: 'grow' }), h('span', {}, 'Total SSTB: ', total)));
     const send = async again => {
-      const payload = { sstb: sstb.value, tanggal: tgl.value, dept: dept.value, pengrajin: peng.value,
+      const payload = { sstb: sstb.value, tanggal: tgl.value, dept: dept.value, pengrajin: peng.value, status: status.value,
         items: this.rows.map(r => ({ kode_motif: r.motif.value, ket: r.ket.value, jumlah: r.jml.value,
           link_produksi: keluar && r.link ? r.link.value : '' })) };
       const res = await fetch(`/api/doc/${this.arah}` + (docId ? '/' + docId : ''), J(docId ? 'PUT' : 'POST', payload));
@@ -1040,7 +1136,7 @@ class DocPage {
     const foot = [];
     if (docId) {
       foot.push(h('button', { class: 'btn danger mr-auto', onclick: async () => {
-        if (!confirm(`Hapus seluruh SSTB ${doc.sstb} beserta semua barisnya?`)) return;
+        if (!(await confirmDelete(`Data SSTB ${doc.sstb} beserta semua barisnya akan dihapus secara permanen.`))) return;
         await fetch(`/api/doc/${this.arah}/${docId}`, { method: 'DELETE' }); modal.close(); this.load();
       } }, 'Hapus SSTB'));
       foot.push(h('button', { class: 'btn', onclick: () => printSSTB(doc, this.label, this.arah) }, 'Cetak SSTB'));
@@ -1173,18 +1269,18 @@ class DocRekap {
   btn.addEventListener('click', e => { e.preventDefault(); inp.value = ''; inp.click(); });
   inp.addEventListener('change', async () => {
     const f = inp.files[0]; if (!f) return;
-    if (!confirm(`PULIHKAN DATABASE dari "${f.name}"?\n\nSeluruh data saat ini akan DIGANTI dengan isi file ini. ` +
-      `Data saat ini otomatis dicadangkan dulu di folder backup (pra-restore-...).`)) return;
+    if (!(await confirmBox('Pulihkan database?', `Dari file "${f.name}".\nSeluruh data saat ini akan DIGANTI dengan isi file ini. ` +
+      `Data saat ini otomatis dicadangkan dulu di folder backup (pra-restore-...).`, { ok: 'Pulihkan', danger: false }))) return;
     const fd = new FormData(); fd.append('file', f);
     if (btn.dataset.busy) return;
     btn.dataset.busy = '1'; btn.textContent = 'Memulihkan…';
     try {
       const res = await fetch('/restore', { method: 'POST', body: fd });
       const r = await res.json();
-      if (!res.ok || !r.ok) { alert(r.error || 'Restore gagal'); btn.textContent = 'Restore DB'; delete btn.dataset.busy; return; }
-      alert('Database berhasil dipulihkan.' + (r.pra ? `\nData sebelumnya disimpan sebagai backup/${r.pra}.` : '') +
-        (r.warnings && r.warnings.length ? '\n\nPeringatan:\n' + r.warnings.join('\n') : ''));
+      if (!res.ok || !r.ok) { await confirmBox('Restore gagal', r.error || 'Restore gagal', { info: true, ok: 'Tutup', danger: false }); btn.textContent = 'Restore DB'; delete btn.dataset.busy; return; }
+      await confirmBox('Database dipulihkan', 'Database berhasil dipulihkan.' + (r.pra ? `\nData sebelumnya disimpan sebagai backup/${r.pra}.` : '') +
+        (r.warnings && r.warnings.length ? '\n\nPeringatan:\n' + r.warnings.join('\n') : ''), { info: true, ok: 'OK', danger: false });
       location.reload();
-    } catch (err) { alert('Restore gagal: ' + err); btn.textContent = 'Restore DB'; delete btn.dataset.busy; }
+    } catch (err) { await confirmBox('Restore gagal', String(err), { info: true, ok: 'Tutup', danger: false }); btn.textContent = 'Restore DB'; delete btn.dataset.busy; }
   });
 })();

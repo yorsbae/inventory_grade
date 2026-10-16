@@ -21,9 +21,9 @@
   <label class="searchbox">Cari <input type="search" id="lq" placeholder="Cari motif / jenis…"></label>
   <span class="grow"></span><a class="btn" id="lxl">Export Excel</a>
  </div>
- <p class="hint">Rekap realtime dihitung kumulatif s/d <b>tanggal akhir periode</b> di atas (default hari ini): produksi (+ Stok Awal Produksi) dikurangi Barang Keluar yang Ket-nya dipetakan ke kolom itu. Setiap sel: <b>sisa</b> (besar) dan
+ <details class="tip"><summary>Petunjuk penggunaan</summary><p>Rekap realtime dihitung kumulatif s/d <b>tanggal akhir periode</b> di atas (default hari ini): produksi (+ Stok Awal Produksi) dikurangi Barang Keluar yang Ket-nya dipetakan ke kolom itu. Setiap sel: <b>sisa</b> (besar) dan
   <i>Produksi − Keluar</i> (kecil). Contoh Neci: produksi 9, keluar 9 &ldquo;Belum Neci&rdquo; → sisa 0; yang kembali sebagai &ldquo;Sudah Neci&rdquo; dicatat di Barang Masuk.
-  Pemetaan kolom ↔ Ket diatur di <a class="lnk" href="/db">DB › Pemetaan Produksi → Keluar</a>. Merah = keluar melebihi produksi.</p>
+  Pemetaan kolom ↔ Ket diatur di <a class="lnk" href="/db">DB › Pemetaan Produksi → Keluar</a>. Merah = keluar melebihi produksi.</p></details>
  <div class="chips" id="lchips"></div>
  <div class="tablewrap"><table id="ltb"></table></div>
 </div>
@@ -45,13 +45,13 @@ const crud=new Crud(document.getElementById('listView'),'produksi',{hideAdd:true
   title:'Produksi',
   searchPlaceholder:'Cari Nama, Pasangan, Kode Motif, Motif, Jenis, Ket, Catatan…',
   fields:[{n:'nama',l:'Nama'},{n:'pasangan',l:'Pasangan'},{n:'kode_motif',l:'Kode Motif'},
-   {n:'motif',l:'Motif'},{n:'jenis',l:'Jenis'},{n:'ket',l:'Keterangan'}],
+   {n:'motif',l:'Motif'},{n:'jenis',l:'Jenis'},{n:'ket',l:'Keterangan'},{n:'status',l:'Status'}],
   rangeField:{n:'jumlah',l:'Jumlah'},
   sortFields:[{n:'tgl_produksi',l:'Tanggal Produksi'},{n:'tgl_masuk_sanggan',l:'Tanggal Masuk Sanggan'},
    {n:'nama',l:'Nama'},{n:'pasangan',l:'Pasangan'},{n:'kode_motif',l:'Kode Motif'},{n:'motif',l:'Motif'},
-   {n:'jenis',l:'Jenis'},{n:'jumlah',l:'Jumlah'},{n:'ket',l:'Keterangan'}],
+   {n:'jenis',l:'Jenis'},{n:'jumlah',l:'Jumlah'},{n:'ket',l:'Keterangan'},{n:'status',l:'Status'}],
   groupFields:[{n:'tgl_produksi',l:'Tanggal Produksi'},{n:'nama',l:'Nama'},{n:'pasangan',l:'Pasangan'},
-   {n:'motif',l:'Motif'},{n:'jenis',l:'Jenis'},{n:'ket',l:'Keterangan'}],
+   {n:'motif',l:'Motif'},{n:'jenis',l:'Jenis'},{n:'ket',l:'Keterangan'},{n:'status',l:'Status'}],
   fetchDistinct:async col=>await(await fetch(`/api/distinct/produksi?col=${col}&`+crud.params())).json()
  }});
 async function run(){

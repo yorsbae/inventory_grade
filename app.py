@@ -19,6 +19,9 @@ RES = getattr(sys, "_MEIPASS", BASE)
 DATA_DIR = os.path.join(BASE, "data")
 BACKUP_DIR = os.path.join(BASE, "backup")
 DB_PATH = os.path.join(DATA_DIR, "inventory.db")
+UPLOAD_DIR = os.path.join(DATA_DIR, "uploads")
+STATUSES = ["Pending", "Proses", "Selesai"]
+ALLOWED_UPLOAD = {".pdf", ".png", ".jpg", ".jpeg", ".xlsx", ".xls", ".csv", ".doc", ".docx"}
 
 app = Flask(__name__, template_folder=os.path.join(RES, "templates"),
             static_folder=os.path.join(RES, "static"))
@@ -93,9 +96,9 @@ def require_login():
         return jsonify(ok=False, error="Sesi habis, silakan login lagi", login=True), 401
     return redirect("/login?" + urlencode({"next": safe_next(request.full_path.rstrip("?"))}))
 
-def start_session(auth):
+def start_session(auth, remember=True):
     session.clear()
-    session.permanent = True
+    session.permanent = bool(remember)  # tanpa "Ingat saya": sesi berakhir saat browser ditutup
     session["u"] = auth["username"]; session["k"] = auth["hash"][-12:]  # sesi lama batal bila password diganti
 
 @app.route("/login", methods=["GET", "POST"])
@@ -115,7 +118,7 @@ def login():
             ok_p = check_password_hash(auth["hash"], request.form.get("password", ""))
             if ok_u and ok_p:
                 _fails.pop(ip, None)
-                start_session(auth)
+                start_session(auth, request.form.get("remember") == "1")
                 return redirect(nxt)
             note_fail(ip)
             err = "Username atau password salah."
@@ -253,7 +256,8 @@ SPECS = {
                              labelsql="""(SELECT d.sstb FROM dokumen d WHERE d.id=t.link_masuk_id)""")]
                           + [C(c, LABELS[c], "int", cat=1) for c in CATS]
                           + [C("jumlah", "Jumlah", "auto", sql=JUMLAH_EXPR, num=1, hc="FF0000"),
-                             C("ket", "Ket", "ref", src="ketprod"), C("catatan", "Catatan")]),
+                             C("ket", "Ket", "ref", src="ketprod"), C("catatan", "Catatan"),
+                             C("status", "Status", "enum", opts=STATUSES, default="Selesai")]),
 }
 
 def reload_cats(db):
@@ -319,8 +323,9 @@ def dmy(v):
 
 def ensure_columns(db):
     """Tambah kolom baru (fitur Link opsional) ke tabel lama tanpa mengubah data yang sudah ada."""
-    add = {"produksi": [("link_masuk_id", "INTEGER")],
-           "dokumen_item": [("link_produksi_id", "INTEGER")]}
+    add = {"produksi": [("link_masuk_id", "INTEGER"), ("status", "TEXT")],
+           "dokumen_item": [("link_produksi_id", "INTEGER")],
+           "dokumen": [("status", "TEXT NOT NULL DEFAULT 'Selesai'")]}
     for tbl, cols in add.items():
         have = {r[1] for r in db.execute(f"PRAGMA table_info({tbl})")}
         for name, decl in cols:
@@ -375,6 +380,14 @@ def init_db():
         ket_id INTEGER NOT NULL REFERENCES ref_ket(id),
         jumlah INTEGER NOT NULL CHECK(jumlah>0),
         link_produksi_id INTEGER)""")
+    db.execute("""CREATE TABLE IF NOT EXISTS dokumen_file (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, dokumen_id INTEGER NOT NULL, nama TEXT NOT NULL,
+        path TEXT NOT NULL, ukuran INTEGER NOT NULL DEFAULT 0, dibuat TEXT NOT NULL)""")
+    db.execute("""CREATE TABLE IF NOT EXISTS riwayat (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, dokumen_id INTEGER NOT NULL, waktu TEXT NOT NULL,
+        pengguna TEXT, aksi TEXT NOT NULL, ket TEXT)""")
+    db.execute("CREATE INDEX IF NOT EXISTS ix_riwayat_dok ON riwayat(dokumen_id)")
+    db.execute("CREATE INDEX IF NOT EXISTS ix_file_dok ON dokumen_file(dokumen_id)")
     ensure_cat_columns(db)  # kolom produksi dinamis (DB > Kolom Produksi)
     ensure_columns(db)  # tambah kolom baru ke tabel lama tanpa menghapus data
     db.execute("CREATE TABLE IF NOT EXISTS settings (k TEXT PRIMARY KEY, v TEXT)")
@@ -681,6 +694,8 @@ def select_parts(key):
             sel.append(f"({c['sql']}) AS {n}")
         elif c["t"] == "linkref":
             sel.append(f"({c['labelsql']}) AS {n}")
+        elif c["t"] == "enum":
+            sel.append(f"COALESCE(t.{n},'{c['default']}') AS {n}")
         else:
             sel.append(f"t.{n} AS {n}")
     joins += s.get("joins", [])
@@ -740,9 +755,9 @@ def apply_ranges(where, params, info, ranges):
 
 def group_order(args, names, order):
     """Prefiks ORDER BY dengan kolom Group By (ASC) supaya baris sekelompok berurutan di halaman yang sama."""
-    g = args.get("group")
-    if g and g in names:
-        return f"{g} ASC, {order}"
+    gs = [x for x in (args.get("group") or "").split(",") if x in names]
+    if gs:
+        return ", ".join(f"{g} ASC" for g in gs) + f", {order}"
     return order
 
 JENIS_FILTER = {  # key -> ekspresi SQL id jenis milik baris, untuk filter "kategori"
@@ -821,7 +836,7 @@ def api_distinct(key):
 def api_meta(key):
     s = spec_or_404(key)
     return jsonify(key=key, title=s["title"], datecol=s.get("datecol"), cats=CATS,
-                   cols=[{k: v for k, v in c.items() if k in ("n", "l", "t", "src", "req", "num", "ro", "cat")} for c in s["cols"]])
+                   cols=[{k: v for k, v in c.items() if k in ("n", "l", "t", "src", "req", "num", "ro", "cat", "opts")} for c in s["cols"]])
 
 OPT_LIMIT_DEFAULT, OPT_LIMIT_MAX = 50, 200  # rekomendasi input: tidak pernah kirim semua data sekaligus
 
@@ -952,6 +967,12 @@ def clean_row(db, key, row, rid=None):
                     errs.append(f"{c['l']}: harus bilangan bulat >= 0"); bad = True; v = None
                 else:
                     v = pv
+        elif t == "enum":
+            v = v or c.get("default")
+            if v is not None:
+                v = next((o for o in c["opts"] if o.lower() == str(v).lower()), None)
+                if v is None:
+                    errs.append(f"{c['l']}: pilih salah satu dari {', '.join(c['opts'])}"); bad = True
         elif t == "ref" and v is not None:
             r = ref_lookup(db, c["src"], v)
             if r is None:
@@ -1136,12 +1157,12 @@ def arah_or_404(name):
     return ARAH[name]
 
 DOC_TOTAL_SQL = "(SELECT COALESCE(SUM(x.jumlah),0) FROM dokumen_item x WHERE x.dokumen_id=d.id)"
-DOC_SORT = ["sstb", "tanggal", "dept", "pengrajin", "jumlah", "link_produksi"]  # kolom tingkat SSTB (1 SSTB = 1 baris di daftar)
+DOC_SORT = ["sstb", "tanggal", "dept", "pengrajin", "jumlah", "link_produksi", "status"]  # kolom tingkat SSTB (1 SSTB = 1 baris di daftar)
 
 LINE_SEARCH_EXPRS = ["d.sstb", "dp.nama", "m.kode_motif", "m.nama_motif", "j.nama", "k.nama", "pg.nama", "k.kode"]
 LINE_COL_EXPRS = {"sstb": "d.sstb", "tanggal": "d.tanggal", "dept": "dp.nama", "kode_motif": "m.kode_motif",
                    "motif": "m.nama_motif", "jenis": "j.nama", "jumlah": DOC_TOTAL_SQL, "ket": "k.nama",
-                   "pengrajin": "pg.nama", "rumus": "k.kode", "link_produksi": LINK_PRODUKSI_SSTB_SQL}
+                   "pengrajin": "pg.nama", "rumus": "k.kode", "link_produksi": LINK_PRODUKSI_SSTB_SQL, "status": "d.status"}
 
 def lines_filters(arah, args):
     """daftar klausa WHERE, params — dipakai bareng oleh lines_query dan /api/distinct/lines."""
@@ -1205,7 +1226,8 @@ def api_lines(name):
         f"SELECT COUNT(*), COALESCE(SUM(i.jumlah),0), COUNT(DISTINCT d.id) {LINE_FROM} {w}", params).fetchone()
     docs = [dict(r) for r in db.execute(
         f"""SELECT d.id AS doc_id, d.sstb AS sstb, d.tanggal AS tanggal, dp.nama AS dept, pg.nama AS pengrajin,
-               {DOC_TOTAL_SQL} AS jumlah, MIN({LINK_PRODUKSI_SSTB_SQL}) AS link_produksi
+               {DOC_TOTAL_SQL} AS jumlah, MIN({LINK_PRODUKSI_SSTB_SQL}) AS link_produksi, d.status AS status,
+               (SELECT COUNT(*) FROM dokumen_file f WHERE f.dokumen_id=d.id) AS n_file
             {LINE_FROM} {w} GROUP BY d.id ORDER BY {order} LIMIT ? OFFSET ?""",
         params + [size, (page - 1) * size]).fetchall()]
     ids = [d["doc_id"] for d in docs]
@@ -1251,7 +1273,7 @@ def api_doc_find(name):
 def api_doc_get(name, doc_id):
     arah = arah_or_404(name)
     db = get_db()
-    d = db.execute("""SELECT d.id, d.sstb, d.tanggal, dp.nama dept, pg.nama pengrajin FROM dokumen d
+    d = db.execute("""SELECT d.id, d.sstb, d.tanggal, d.status, dp.nama dept, pg.nama pengrajin FROM dokumen d
         JOIN ref_dept dp ON dp.id=d.dept_id LEFT JOIN ref_pengrajin pg ON pg.id=d.pengrajin_id
         WHERE d.id=? AND d.arah=?""", (doc_id, arah)).fetchone()
     if not d:
@@ -1340,13 +1362,23 @@ def validate_doc(db, arah, data, doc_id=None):
                     errs.append((None, msg + " (mode ketat: ditolak)"))
                 else:
                     warns.append(msg)
+    status = text_of(data.get("status")) or "Selesai"
+    status = next((o for o in STATUSES if o.lower() == status.lower()), None)
+    if status is None:
+        errs.append((None, f"Status harus salah satu dari {', '.join(STATUSES)}"))
     clean = dict(sstb=sstb, tanggal=tanggal, dept_id=dept["id"] if dept else None,
-                 pengrajin_id=pg["id"] if pg else None, items=items)
+                 pengrajin_id=pg["id"] if pg else None, items=items, status=status)
     return clean, errs, warns
 
+def log_doc(db, doc_id, aksi, ket=""):
+    """Catat riwayat SSTB (dibuat, diubah, status, dokumen) untuk tab Riwayat di halaman detail."""
+    db.execute("INSERT INTO riwayat(dokumen_id,waktu,pengguna,aksi,ket) VALUES(?,?,?,?,?)",
+               (doc_id, dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), session.get("u") or "-", aksi, ket))
+
 def insert_doc(db, arah, c):
-    did = db.execute("INSERT INTO dokumen(arah,sstb,tanggal,dept_id,pengrajin_id) VALUES(?,?,?,?,?)",
-                     (arah, c["sstb"], c["tanggal"], c["dept_id"], c["pengrajin_id"])).lastrowid
+    did = db.execute("INSERT INTO dokumen(arah,sstb,tanggal,dept_id,pengrajin_id,status) VALUES(?,?,?,?,?,?)",
+                     (arah, c["sstb"], c["tanggal"], c["dept_id"], c["pengrajin_id"], c.get("status") or "Selesai")).lastrowid
+    log_doc(db, did, "Dibuat", f"{len(c['items'])} baris barang, status {c.get('status') or 'Selesai'}")
     db.executemany("INSERT INTO dokumen_item(dokumen_id,motif_id,ket_id,jumlah,link_produksi_id) VALUES(?,?,?,?,?)",
                    [(did, x["motif_id"], x["ket_id"], x["jumlah"], x.get("link_produksi_id")) for x in c["items"]])
     return did
@@ -1362,8 +1394,10 @@ def save_doc(name, doc_id=None):
     if doc_id is None:
         insert_doc(db, arah, c)
     else:
-        db.execute("UPDATE dokumen SET sstb=?,tanggal=?,dept_id=?,pengrajin_id=? WHERE id=?",
-                   (c["sstb"], c["tanggal"], c["dept_id"], c["pengrajin_id"], doc_id))
+        old = db.execute("SELECT status FROM dokumen WHERE id=?", (doc_id,)).fetchone()["status"]
+        db.execute("UPDATE dokumen SET sstb=?,tanggal=?,dept_id=?,pengrajin_id=?,status=? WHERE id=?",
+                   (c["sstb"], c["tanggal"], c["dept_id"], c["pengrajin_id"], c["status"], doc_id))
+        log_doc(db, doc_id, "Diubah", f"{len(c['items'])} baris barang" + (f"; status {old} → {c['status']}" if old != c["status"] else ""))
         db.execute("DELETE FROM dokumen_item WHERE dokumen_id=?", (doc_id,))
         db.executemany("INSERT INTO dokumen_item(dokumen_id,motif_id,ket_id,jumlah,link_produksi_id) VALUES(?,?,?,?,?)",
                        [(doc_id, x["motif_id"], x["ket_id"], x["jumlah"], x.get("link_produksi_id")) for x in c["items"]])
@@ -1384,6 +1418,13 @@ def delete_doc(db, arah, doc_id):
         return False
     if arah == "M":  # lepas tautan produksi ke SSTB yang dihapus
         db.execute("UPDATE produksi SET link_masuk_id=NULL WHERE link_masuk_id=?", (doc_id,))
+    for f in db.execute("SELECT path FROM dokumen_file WHERE dokumen_id=?", (doc_id,)).fetchall():
+        try:
+            os.remove(os.path.join(UPLOAD_DIR, f["path"]))
+        except OSError:
+            pass
+    db.execute("DELETE FROM dokumen_file WHERE dokumen_id=?", (doc_id,))
+    db.execute("DELETE FROM riwayat WHERE dokumen_id=?", (doc_id,))
     db.execute("DELETE FROM dokumen_item WHERE dokumen_id=?", (doc_id,))
     db.execute("DELETE FROM dokumen WHERE id=? AND arah=?", (doc_id, arah))
     return True
@@ -1419,6 +1460,139 @@ def api_item_delete(name, item_id):
             db.execute("DELETE FROM dokumen WHERE id=?", (r["dokumen_id"],))
         db.commit()
     return jsonify(ok=True)
+
+# --------------------------------------------------------------------------
+# Detail SSTB: item, dokumen (lampiran), riwayat + alur status Pending -> Proses -> Selesai
+# --------------------------------------------------------------------------
+@app.get("/api/doc/<name>/<int:doc_id>/detail")
+def api_doc_detail(name, doc_id):
+    arah = arah_or_404(name)
+    db = get_db()
+    d = db.execute("""SELECT d.id, d.sstb, d.tanggal, d.status, dp.nama dept, pg.nama pengrajin FROM dokumen d
+        JOIN ref_dept dp ON dp.id=d.dept_id LEFT JOIN ref_pengrajin pg ON pg.id=d.pengrajin_id
+        WHERE d.id=? AND d.arah=?""", (doc_id, arah)).fetchone()
+    if not d:
+        abort(404)
+    out = dict(d)
+    out["items"] = [dict(x) for x in db.execute(f"""SELECT m.kode_motif, m.nama_motif motif, j.nama jenis, k.nama ket,
+            i.jumlah, {LINK_PRODUKSI_LABEL_SQL} AS link_produksi
+        FROM dokumen_item i JOIN ref_motif m ON m.id=i.motif_id LEFT JOIN ref_jenis j ON j.id=m.jenis_id
+        JOIN ref_ket k ON k.id=i.ket_id WHERE i.dokumen_id=? ORDER BY i.id""", (doc_id,))]
+    out["files"] = [dict(x) for x in db.execute(
+        "SELECT id, nama, ukuran, dibuat FROM dokumen_file WHERE dokumen_id=? ORDER BY id", (doc_id,))]
+    out["riwayat"] = [dict(x) for x in db.execute(
+        "SELECT waktu, pengguna, aksi, ket FROM riwayat WHERE dokumen_id=? ORDER BY id DESC", (doc_id,))]
+    out["total"] = sum(i["jumlah"] for i in out["items"])
+    out["statuses"] = STATUSES
+    return jsonify(out)
+
+@app.post("/api/doc/<name>/<int:doc_id>/status")
+def api_doc_status(name, doc_id):
+    arah = arah_or_404(name)
+    db = get_db()
+    row = db.execute("SELECT status FROM dokumen WHERE id=? AND arah=?", (doc_id, arah)).fetchone()
+    if not row:
+        abort(404)
+    new = text_of((request.get_json(force=True) or {}).get("status"))
+    new = next((o for o in STATUSES if o.lower() == (new or "").lower()), None)
+    if not new:
+        return jsonify(ok=False, error=f"Status harus salah satu dari {', '.join(STATUSES)}"), 400
+    if new != row["status"]:
+        db.execute("UPDATE dokumen SET status=? WHERE id=?", (new, doc_id))
+        log_doc(db, doc_id, "Status", f"{row['status']} → {new}")
+        db.commit()
+    return jsonify(ok=True, status=new)
+
+@app.post("/api/doc/<name>/<int:doc_id>/file")
+def api_doc_upload(name, doc_id):
+    arah = arah_or_404(name)
+    db = get_db()
+    if not db.execute("SELECT 1 FROM dokumen WHERE id=? AND arah=?", (doc_id, arah)).fetchone():
+        abort(404)
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify(ok=False, error="Pilih file terlebih dahulu"), 400
+    ext = os.path.splitext(f.filename)[1].lower()
+    if ext not in ALLOWED_UPLOAD:
+        return jsonify(ok=False, error="Tipe file tidak didukung (boleh: " + ", ".join(sorted(ALLOWED_UPLOAD)) + ")"), 400
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    stored = f"{secrets.token_hex(12)}{ext}"
+    f.save(os.path.join(UPLOAD_DIR, stored))
+    size = os.path.getsize(os.path.join(UPLOAD_DIR, stored))
+    nama = os.path.basename(f.filename.replace("\\", "/"))[:120]
+    db.execute("INSERT INTO dokumen_file(dokumen_id,nama,path,ukuran,dibuat) VALUES(?,?,?,?,?)",
+               (doc_id, nama, stored, size, dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    log_doc(db, doc_id, "Dokumen", f"Unggah {nama}")
+    db.commit()
+    return jsonify(ok=True)
+
+@app.get("/api/file/<int:fid>")
+def api_file_get(fid):
+    r = get_db().execute("SELECT nama, path FROM dokumen_file WHERE id=?", (fid,)).fetchone()
+    if not r:
+        abort(404)
+    return send_file(os.path.join(UPLOAD_DIR, r["path"]), as_attachment=True, download_name=r["nama"])
+
+@app.delete("/api/file/<int:fid>")
+def api_file_del(fid):
+    db = get_db()
+    r = db.execute("SELECT dokumen_id, nama, path FROM dokumen_file WHERE id=?", (fid,)).fetchone()
+    if r:
+        try:
+            os.remove(os.path.join(UPLOAD_DIR, r["path"]))
+        except OSError:
+            pass
+        db.execute("DELETE FROM dokumen_file WHERE id=?", (fid,))
+        log_doc(db, r["dokumen_id"], "Dokumen", f"Hapus {r['nama']}")
+        db.commit()
+    return jsonify(ok=True)
+
+# --------------------------------------------------------------------------
+# Dashboard / Ringkasan Stok
+# --------------------------------------------------------------------------
+@app.get("/api/dashboard")
+def api_dashboard():
+    db = get_db()
+    today = dt.date.today()
+    days = 30
+    f = (today - dt.timedelta(days=days - 1)).isoformat()
+    f_prev = (today - dt.timedelta(days=2 * days - 1)).isoformat()
+    t = today.isoformat()
+
+    def doc_sum(arah, a, b):
+        return db.execute("""SELECT COALESCE(SUM(i.jumlah),0) FROM dokumen_item i JOIN dokumen d ON d.id=i.dokumen_id
+                             WHERE d.arah=? AND d.tanggal>=? AND d.tanggal<=?""", (arah, a, b)).fetchone()[0]
+
+    def prod_sum(a, b):
+        return db.execute(f"SELECT COALESCE(SUM({JUMLAH_EXPR}),0) FROM produksi t WHERE t.tgl_produksi>=? AND t.tgl_produksi<=?",
+                          (a, b)).fetchone()[0]
+
+    prev_end = (today - dt.timedelta(days=days)).isoformat()
+    cur = dict(masuk=doc_sum("M", f, t), produksi=prod_sum(f, t), keluar=doc_sum("K", f, t))
+    prv = dict(masuk=doc_sum("M", f_prev, prev_end), produksi=prod_sum(f_prev, prev_end), keluar=doc_sum("K", f_prev, prev_end))
+    pct = {k: (round((cur[k] - prv[k]) * 100.0 / prv[k], 1) if prv[k] else None) for k in cur}
+
+    # total stok = stok awal + masuk - keluar (semua histori, per motif mengikuti tanggal mulai opening)
+    _, data = stock_view(db, t, t, "ringkas", "jenis")
+    grades = [dict(jenis=r.get("grp") or r.get("jenis") or "-", stok=r["akhir"]) for r in data if not r.get("total")]
+    total_stok = sum(r["akhir"] for r in data if not r.get("total"))
+
+    # pergerakan harian
+    series = {}
+    for i in range(days):
+        series[(today - dt.timedelta(days=days - 1 - i)).isoformat()] = dict(masuk=0, produksi=0, keluar=0)
+    for arah, key in (("M", "masuk"), ("K", "keluar")):
+        for r in db.execute("""SELECT d.tanggal tgl, SUM(i.jumlah) s FROM dokumen_item i JOIN dokumen d ON d.id=i.dokumen_id
+                               WHERE d.arah=? AND d.tanggal>=? AND d.tanggal<=? GROUP BY d.tanggal""", (arah, f, t)):
+            if r["tgl"] in series:
+                series[r["tgl"]][key] = r["s"]
+    for r in db.execute(f"""SELECT t.tgl_produksi tgl, SUM({JUMLAH_EXPR}) s FROM produksi t
+                            WHERE t.tgl_produksi>=? AND t.tgl_produksi<=? GROUP BY t.tgl_produksi""", (f, t)):
+        if r["tgl"] in series:
+            series[r["tgl"]]["produksi"] = r["s"]
+    pending = db.execute("SELECT COUNT(*) FROM dokumen WHERE status<>'Selesai'").fetchone()[0]
+    return jsonify(days=days, cur=cur, pct=pct, total_stok=total_stok, grades=grades, pending=pending,
+                   series=[dict(tgl=k, **v) for k, v in series.items()])
 
 # --------------------------------------------------------------------------
 # Logika stok: saldo akhir hari N = saldo awal hari N+1
@@ -2279,21 +2453,36 @@ def daily_backup(keep=30):
 # --------------------------------------------------------------------------
 # Halaman
 # --------------------------------------------------------------------------
-PAGES = [("db", "1. DB"), ("masuk", "2. Barang Masuk"), ("produksi", "3. Produksi"),
-         ("keluar", "4. Barang Keluar"), ("stok", "5. Laporan Stok")]
+PAGES = [("dashboard", "Ringkasan Stok", "grid"), ("masuk", "Barang Masuk", "in"), ("produksi", "Produksi", "factory"),
+         ("keluar", "Barang Keluar", "out"), ("stok", "Laporan Stok", "report"), ("db", "Master Data", "db")]
 
 @app.context_processor
 def inject():
-    return dict(pages=PAGES, current=request.path.strip("/").split("/")[0])
+    return dict(pages=PAGES, current=request.path.strip("/").split("/")[0], user=session.get("u") or "Admin")
 
 @app.get("/")
 def home():
-    return redirect("/stok")
+    return redirect("/dashboard")
+
+@app.get("/dashboard")
+def page_dashboard():
+    return render_template("dashboard.html", title="Ringkasan Stok", crumb=[("Dashboard", None)])
+
+@app.get("/<name>/<int:doc_id>")
+def page_detail(name, doc_id):
+    if name not in ARAH:
+        abort(404)
+    r = get_db().execute("SELECT sstb FROM dokumen WHERE id=? AND arah=?", (doc_id, ARAH[name])).fetchone()
+    if not r:
+        abort(404)
+    return render_template("detail.html", arah=name, doc_id=doc_id, sstb=r["sstb"],
+                           title=f"Detail {DOC_TITLE[name]}", label=DOC_TITLE[name],
+                           crumb=[(DOC_TITLE[name], "/" + name), ("Detail", None)])
 
 @app.get("/db")
 def page_db():
     tabs = [(k, SPECS[k]["title"]) for k in ("motif", "jenis", "opening", "kolom_prod", "opening_prod", "ket", "map_keluar", "map_balik", "dept", "ketprod", "pengrajin", "karyawan")]
-    return render_template("db.html", tabs=tabs, title="DB (Master Data)")
+    return render_template("db.html", tabs=tabs, title="Data Master", crumb=[("Master Data", None)])
 
 @app.get("/<key>")
 def page_main(key):
@@ -2304,16 +2493,20 @@ def page_main(key):
         r = db.execute("SELECT tgl_produksi FROM produksi WHERE id=?", (int(pid),)).fetchone() if pid.isdigit() else None
         if r and r[0]:  # dibuka dari hyperlink Link Produksi: tampilkan satu input saja
             init = dict(pid=int(pid), tanggal=r[0])
-        return render_template("produksi.html", title="Produksi", init=init)
+        return render_template("produksi.html", title="Daftar Produksi", init=init, crumb=[("Produksi", "/produksi"), ("Daftar Produksi", None)])
     if key in ARAH:
         init = {}
         sstb = (request.args.get("sstb") or "").strip()
+        qs = (request.args.get("q") or "").strip()
+        if qs:
+            init = dict(q=qs)
         r = db.execute("SELECT MIN(tanggal) FROM dokumen WHERE arah=? AND sstb=?", (ARAH[key], sstb)).fetchone() if sstb else None
         if r and r[0]:  # dibuka dari hyperlink SSTB: filter ke SSTB itu dan sesuaikan rentang tanggal
             init = dict(sstb=sstb, tanggal=r[0])
-        return render_template("doc.html", arah=key, title=DOC_TITLE[key], init=init)
+        return render_template("doc.html", arah=key, title=f"Daftar SSTB {DOC_TITLE[key]}", label=DOC_TITLE[key], init=init,
+                               crumb=[(DOC_TITLE[key], "/" + key), ("Daftar SSTB", None)])
     if key == "stok":
-        return render_template("stok.html", title="Laporan Posisi Stok")
+        return render_template("stok.html", title="Laporan Stok", crumb=[("Laporan", None), ("Laporan Stok", None)])
     if key == "rekap":
         return redirect("/produksi")
     abort(404)

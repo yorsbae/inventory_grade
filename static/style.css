@@ -14,7 +14,7 @@ svg{fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-l
 /* ----- layout: sidebar + konten ----- */
 .app{display:flex;min-height:100vh}
 .side{width:var(--sw);background:linear-gradient(180deg,var(--navy) 0%,#091f45 100%);color:#c9d6ee;display:flex;flex-direction:column;position:fixed;inset:0 auto 0 0;z-index:40;transition:transform .2s}
-.side-brand{display:flex;align-items:center;gap:10px;color:#fff;text-decoration:none;font-weight:800;letter-spacing:.04em;font-size:15px;padding:20px 18px 18px}
+.side-brand{flex:1;display:flex;align-items:center;gap:10px;color:#fff;text-decoration:none;font-weight:800;letter-spacing:.04em;font-size:15px;padding:20px 18px 18px}
 .logo{width:30px;height:30px;border-radius:8px;background:rgba(255,255,255,.12);display:grid;place-items:center}
 .logo svg{width:19px;height:19px;stroke:#fff}
 .side nav{display:flex;flex-direction:column;gap:2px;padding:6px 10px;flex:1}
@@ -355,3 +355,32 @@ details.tip p,details.tip div{margin:8px 0 2px}
 @media(max-width:720px){.fpanel{left:8px!important;right:8px;width:auto!important;top:60px!important;max-height:calc(100vh - 76px)!important}}
 .fpanel .gchecks{display:flex;flex-direction:row;flex-wrap:wrap;gap:8px}
 .fpanel .gitem{width:auto}
+
+/* ----- sidebar: tombol buka/tutup + mode ikon saja ----- */
+.side-head{display:flex;align-items:center;justify-content:space-between;padding:0 12px 0 0}
+.side-head .side-brand em{font-style:normal}
+.side-toggle{border:0;background:rgba(255,255,255,.1);color:#c9d6ee;width:28px;height:28px;border-radius:8px;cursor:pointer;display:grid;place-items:center;flex:none}
+.side-toggle:hover{background:rgba(255,255,255,.2);color:#fff}
+.side-toggle svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2.2;transition:transform .2s}
+.side{transition:transform .2s,width .2s}.content{transition:margin-left .2s}
+.subnav-h{display:none}
+@media(min-width:901px){
+ body.side-collapsed{--sw:68px}
+ body.side-collapsed .side-head{flex-direction:column;gap:8px;padding:14px 0 6px}
+ body.side-collapsed .side-brand{padding:0}
+ body.side-collapsed .side-brand em,body.side-collapsed .side-foot,body.side-collapsed .side nav a span,body.side-collapsed .navp .chev{display:none}
+ body.side-collapsed .side-toggle svg{transform:rotate(180deg)}
+ body.side-collapsed .side nav{padding:6px 8px}
+ body.side-collapsed .side nav a{justify-content:center;padding:11px 0}
+ body.side-collapsed .side nav a svg{width:20px;height:20px}
+ body.side-collapsed .navg{position:relative}
+ body.side-collapsed .navg>.subnav{display:none;position:absolute;left:calc(100% + 6px);top:0;min-width:200px;margin:0;padding:6px;border:1px solid rgba(255,255,255,.14);border-radius:10px;background:var(--navy-2);box-shadow:0 12px 32px rgba(0,0,0,.35);z-index:60}
+ body.side-collapsed .navg:hover>.subnav,body.side-collapsed .navg:focus-within>.subnav{display:flex}
+ body.side-collapsed .subnav-h{display:block;padding:6px 10px 8px;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#8ea3cc;font-weight:700}
+ body.side-collapsed .side nav .subnav a{justify-content:flex-start;padding:7px 10px}
+}
+@media(min-width:901px){
+ body.side-collapsed .side nav a.navp .chev{display:none}
+ body.side-collapsed .navg>.subnav{max-height:calc(100vh - 24px);overflow:auto}
+ body.side-collapsed .navg[data-k=db]>.subnav{top:auto;bottom:0}
+}

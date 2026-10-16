@@ -1,16 +1,15 @@
 {% extends "base.html" %}
 {% block body %}
-<div class="tabs">{% for k,l in tabs %}<button data-k="{{k}}" class="{{ 'on' if loop.first else '' }}">{{l}}</button>{% endfor %}</div>
 <details class="tip"><summary>Petunjuk penggunaan</summary><p>Data master hanya disimpan <b>sekali</b> di sini dan dipilih lewat dropdown di halaman lain. Mengganti nama master otomatis berlaku di semua data lama.
 Master yang sudah dipakai tidak bisa dihapus. <b>Stok Awal Sistem</b> = saldo pembuka per Kode Motif (Motif &amp; Jenis terisi otomatis) saat mulai memakai program; Laporan Stok menjumlahkannya per Jenis.</p></details>
-<div id="panes">{% for k,l in tabs %}<div class="pane" id="p_{{k}}" style="{{ '' if loop.first else 'display:none' }}"></div>{% endfor %}</div>
+<div id="panes">{% for k,l in tabs %}<div class="pane" id="p_{{k}}" style="display:none"></div>{% endfor %}</div>
 {% endblock %}
 {% block script %}<script>
 const made={};
+const TABS={{ tabs|tojson }};
 function show(k){document.querySelectorAll('.pane').forEach(p=>p.style.display='none');
  document.getElementById('p_'+k).style.display='';
- document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('on',b.dataset.k===k));
+ const t=(TABS.find(x=>x[0]===k)||[])[1];if(t)document.querySelector('.page-h h1').textContent='Data Master — '+t;
  if(!made[k]){made[k]=new Crud(document.getElementById('p_'+k),k,k==='kolom_prod'?{onChange:()=>{delete made.opening_prod;delete made.produksi;}}:{});}}
-document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>show(b.dataset.k));
-show('{{ tabs[0][0] }}');
+pageViews(TABS,show);   // tabel dipilih lewat sub-menu "Master Data" di sidebar (?v=motif, ?v=jenis, ...)
 </script>{% endblock %}

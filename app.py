@@ -2573,9 +2573,13 @@ SUBMENU = {
     "stok": [("ringkas", "Ringkas"), ("harian", "Per Hari")],
 }
 
+# Tabel Master Data (jadi sub-menu "Master Data" di sidebar; kode tabel = nilai ?v=)
+DB_TABS = ("motif", "jenis", "opening", "kolom_prod", "opening_prod", "ket", "map_keluar", "map_balik", "dept", "ketprod", "pengrajin", "karyawan")
+
 @app.context_processor
 def inject():
-    nav = [(k, l, i, SUBMENU.get(k, [])) for k, l, i in PAGES]
+    db_tabs = [(k, SPECS[k]["title"]) for k in DB_TABS]
+    nav = [(k, l, i, db_tabs if k == "db" else SUBMENU.get(k, [])) for k, l, i in PAGES]
     return dict(pages=PAGES, nav=nav, current=request.path.strip("/").split("/")[0], user=session.get("u") or "Admin")
 
 @app.get("/")
@@ -2599,7 +2603,7 @@ def page_detail(name, doc_id):
 
 @app.get("/db")
 def page_db():
-    tabs = [(k, SPECS[k]["title"]) for k in ("motif", "jenis", "opening", "kolom_prod", "opening_prod", "ket", "map_keluar", "map_balik", "dept", "ketprod", "pengrajin", "karyawan")]
+    tabs = [(k, SPECS[k]["title"]) for k in DB_TABS]
     return render_template("db.html", tabs=tabs, title="Data Master", crumb=[("Master Data", None)])
 
 @app.get("/<key>")

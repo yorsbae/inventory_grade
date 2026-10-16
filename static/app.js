@@ -71,6 +71,11 @@ const confirmDelete = (text) => confirmBox('Konfirmasi Hapus Data', (text ? text
   const mb = document.getElementById('menuBtn'), bg = document.getElementById('sideBg');
   if (mb) mb.onclick = () => document.body.classList.toggle('menu-open');
   if (bg) bg.onclick = () => document.body.classList.remove('menu-open');
+  const stg = document.getElementById('sideToggle');
+  if (stg) stg.onclick = () => {
+    const on = document.body.classList.toggle('side-collapsed');
+    try { localStorage.setItem('sideCollapsed', on ? '1' : '0'); } catch {}
+  };
   const um = document.getElementById('userMenu'), ub = document.getElementById('userBtn');
   if (um && ub) {
     ub.onclick = e => { e.stopPropagation(); um.classList.toggle('open'); };

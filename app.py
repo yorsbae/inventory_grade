@@ -331,6 +331,8 @@ def ensure_columns(db):
         for name, decl in cols:
             if name not in have:
                 db.execute(f"ALTER TABLE {tbl} ADD COLUMN {name} {decl}")
+    # baris lama yang statusnya NULL tampil sebagai 'Selesai'; samakan isinya di DB supaya cek duplikat tidak meleset
+    db.execute("UPDATE produksi SET status='Selesai' WHERE status IS NULL OR trim(status)=''")
 
 def init_db():
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -1004,12 +1006,54 @@ def clean_row(db, key, row, rid=None):
                 errs.append(f"{c['l']}: '{row.get(c['n'])}' sudah ada")
     return out, errs
 
+_write_lock = threading.RLock()  # cek-duplikat + insert + commit satu paket, supaya 2 request bersamaan tidak lolos berdua
+
+def dedup_cols(key):
+    """Kolom penentu 'baris yang sama persis' untuk tabel tanpa kolom unik (mis. Produksi). None = tabel punya kolom unik."""
+    cols = [c for c in SPECS[key]["cols"] if c["t"] != "auto"]
+    return None if any(c.get("uniq") for c in cols) else cols
+
+def sig_sql(c):
+    """Ekspresi SQL satu kolom untuk tanda tangan baris; enum NULL dianggap nilai defaultnya (sama seperti yang tampil)."""
+    n = dbcol(c)
+    if c["t"] == "enum" and c.get("default"):
+        return "COALESCE(%s,'%s')" % (n, str(c["default"]).replace("'", "''"))
+    return n
+
+def find_duplicate(db, key, out, exclude_id=None):
+    """id baris yang isinya sama persis dengan `out` (hasil clean_row), atau None. Teks tidak peka huruf besar/kecil."""
+    cols = dedup_cols(key)
+    if cols is None:
+        return None
+    exact = [c for c in cols if c["t"] in ("date", "int", "ref", "linkref", "enum")]
+    texts = [c for c in cols if c not in exact]
+    conds, params = [], []
+    for c in exact:
+        conds.append(sig_sql(c) + " IS ?"); params.append(out.get(dbcol(c)))
+    if exclude_id:
+        conds.append("id<>?"); params.append(exclude_id)
+    sel = ["id"] + [sig_sql(c) for c in texts]
+    want = sig_row([out.get(dbcol(c)) for c in texts])
+    q = f"SELECT {','.join(sel)} FROM {SPECS[key]['table']}" + (" WHERE " + " AND ".join(conds) if conds else "")
+    for r in db.execute(q, params):
+        if sig_row(list(r)[1:]) == want:
+            return r[0]
+    return None
+
 def save(key, rid=None):
     s = spec_or_404(key)
     db = get_db()
     out, errs = clean_row(db, key, request.get_json(force=True) or {}, rid)
     if errs:
         return jsonify(ok=False, errors=errs), 400
+    with _write_lock:
+        return _save_locked(s, db, key, rid, out)
+
+def _save_locked(s, db, key, rid, out):
+    dup = find_duplicate(db, key, out, rid)
+    if dup:
+        return jsonify(ok=False, errors=[f"Data ganda: baris yang sama persis sudah ada (ID #{dup}), jadi tidak disimpan. "
+                                         "Bila memang input terpisah, bedakan lewat kolom Catatan."]), 409
     if key == "kolom_prod":
         if rid is None:
             out["kode"] = kolom_slug(db, out["nama"])
@@ -2357,30 +2401,35 @@ def import_xlsx(key):
     rows, err = read_sheet(request.files.get("file"), [(c["n"], c["l"], c.get("alias", [])) for c in cols])
     if err:
         return err
-    ok, dup, errors = 0, 0, []
-    # Tabel tanpa kolom unik (mis. Produksi): baris yang identik dengan data yang SUDAH ada dilewati,
-    # sehingga import ulang file yang sama tidak menggandakan data.
-    existing = None
-    if not any(c.get("uniq") for c in cols):
-        names = [dbcol(c) for c in cols]
-        existing = Counter(sig_row(r) for r in db.execute(f"SELECT {','.join(names)} FROM {s['table']}"))
-    for rn, row in rows:
-        out, errs = clean_row(db, key, row)
-        if errs:
-            errors.append({"row": rn, "msg": "; ".join(errs)}); continue
-        if existing is not None:
-            sg = sig_row([out[dbcol(c)] for c in cols])
-            if existing[sg] > 0:
-                existing[sg] -= 1; dup += 1; continue
+    ok, dup, dup_file, errors = 0, 0, 0, []
+    # Tabel tanpa kolom unik (mis. Produksi): baris yang identik dengan data yang SUDAH ada di DB, atau yang muncul
+    # lebih dari sekali di file yang sama, dilewati. Import ulang / file dengan baris dobel tidak menggandakan data.
+    with _write_lock:
+        ded = dedup_cols(key)
+        existing, in_file = None, set()
+        if ded is not None:
+            existing = {sig_row(list(r)) for r in db.execute(
+                f"SELECT {','.join(sig_sql(c) for c in ded)} FROM {s['table']}")}
+        for rn, row in rows:
+            out, errs = clean_row(db, key, row)
+            if errs:
+                errors.append({"row": rn, "msg": "; ".join(errs)}); continue
+            if existing is not None:
+                sg = sig_row([out[dbcol(c)] for c in ded])
+                if sg in existing:
+                    dup += 1; continue
+                if sg in in_file:
+                    dup_file += 1; continue
+                in_file.add(sg)
+            if key == "kolom_prod":
+                out["kode"] = kolom_slug(db, out["nama"])
+            cn = list(out.keys())
+            db.execute(f"INSERT INTO {s['table']}({','.join(cn)}) VALUES ({','.join('?'*len(cn))})", [out[c] for c in cn])
+            ok += 1
         if key == "kolom_prod":
-            out["kode"] = kolom_slug(db, out["nama"])
-        cn = list(out.keys())
-        db.execute(f"INSERT INTO {s['table']}({','.join(cn)}) VALUES ({','.join('?'*len(cn))})", [out[c] for c in cn])
-        ok += 1
-    if key == "kolom_prod":
-        ensure_cat_columns_after(db)
-    db.commit()
-    return jsonify(ok=True, inserted=ok, duplicates=dup, unit="baris", errors=errors[:200], error_count=len(errors))
+            ensure_cat_columns_after(db)
+        db.commit()
+    return jsonify(ok=True, inserted=ok, duplicates=dup, duplicates_in_file=dup_file, unit="baris", errors=errors[:200], error_count=len(errors))
 
 def import_docs(db, name):
     """Import Barang Masuk/Keluar. Satu SSTB boleh berisi banyak motif (baris dengan SSTB sama dikelompokkan).

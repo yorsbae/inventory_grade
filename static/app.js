@@ -232,7 +232,8 @@ function ioTools(key, onDone, notify, impBox, hideTemplate) {
       if (!res.ok) { notify((r.errors || [{ msg: r.error || 'Import gagal' }]).map(e => e.msg).join('\n'), 'err'); return; }
       const dup = r.duplicates ? `, ${r.duplicates} dilewati (sudah ada)` : '';
       const app = r.appended ? `, ${r.appended} SSTB lama ditambah motif baru` : '';
-      notify(`Import selesai: ${r.inserted} ${r.unit} masuk${app}${dup}, ${r.error_count} ditolak.`, r.error_count ? 'warn' : 'ok', true);
+      const dupf = r.duplicates_in_file ? `, ${r.duplicates_in_file} dilewati (ganda di dalam file)` : '';
+      notify(`Import selesai: ${r.inserted} ${r.unit} masuk${app}${dup}${dupf}, ${r.error_count} ditolak.`, r.error_count ? 'warn' : 'ok', true);
       for (const e of r.errors) impBox.append(h('div', {}, `Baris Excel ${e.row}: ${e.msg}`));
       onDone();
     } catch (err) {
@@ -931,8 +932,12 @@ class Crud {
     this.recalcSum();
     const btnCancel = h('button', { class: 'btn', onclick: () => modal.close() }, 'Batal');
     const foot = [btnCancel];
-    if (!editId) foot.push(h('button', { class: 'btn', onclick: () => this.save(true) }, 'Simpan & Tambah Lagi'));
-    foot.push(h('button', { class: 'btn primary', onclick: () => this.save(false) }, editId ? 'Update' : 'Simpan'));
+    const btnAgain = editId ? null : h('button', { class: 'btn', onclick: () => this.save(true) }, 'Simpan & Tambah Lagi');
+    const btnSave = h('button', { class: 'btn primary', onclick: () => this.save(false) }, editId ? 'Update' : 'Simpan');
+    if (btnAgain) foot.push(btnAgain);
+    foot.push(btnSave);
+    this.footBtns = [btnAgain, btnSave].filter(Boolean);  // dikunci selama request berjalan (cegah input double)
+    this.saving = false;
     const modal = openModal((editId ? 'Edit ' : 'Tambah ') + m.title, h('div', {}, fmsg, grid,
       editId ? null : h('p', { class: 'hint' }, 'Enter = simpan & tambah lagi. Kolom abu-abu terisi otomatis.')), foot);
     this.modal = modal; this.fmsg = fmsg; this.editId = editId;
@@ -940,12 +945,26 @@ class Crud {
     (this.f[(first || m.cols[0]).n]).focus();
   }
   async save(again) {
+    if (this.saving) return;  // klik ganda / Enter ditahan: satu request saja
+    this.saving = true;
+    const btns = this.footBtns || [];
+    btns.forEach(b => { b.disabled = true; });
     const m = this.meta, body = {};
     for (const c of m.cols) if (c.t !== 'auto') body[c.n] = this.f[c.n].value;
     const editId = this.editId;
-    const res = await fetch('/api/' + this.key + (editId ? '/' + editId : ''), J(editId ? 'PUT' : 'POST', body));
-    const r = await res.json();
-    if (!res.ok) { this.fmsg.className = 'msg err'; this.fmsg.textContent = r.errors.join('\n'); return; }
+    let res, r;
+    try {
+      res = await fetch('/api/' + this.key + (editId ? '/' + editId : ''), J(editId ? 'PUT' : 'POST', body));
+      r = await res.json();
+    } catch (err) {
+      this.saving = false; btns.forEach(b => { b.disabled = false; });
+      this.fmsg.className = 'msg err'; this.fmsg.textContent = 'Gagal menyimpan: ' + err;
+      return;
+    }
+    if (!res.ok) {
+      this.saving = false; btns.forEach(b => { b.disabled = false; });
+      this.fmsg.className = 'msg err'; this.fmsg.textContent = (r.errors || [r.error || 'Gagal menyimpan']).join('\n'); return;
+    }
     if (!editId && this.key === 'produksi')
       this.sticky = { tgl_produksi: body.tgl_produksi, tgl_masuk_sanggan: body.tgl_masuk_sanggan, nama: body.nama, pasangan: body.pasangan };
     this.modal.close(); this.notify('Tersimpan.', 'ok');
